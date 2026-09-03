@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 - 2026-09-03
+
+- Regenerate the release workflow with maelys-release 0.2.3, which grants
+  the tap job the permissions its bottle attestation needs. The `v0.5.2`
+  tag exists but produced no release either: its tap job was refused at
+  startup for that reason.
+
 ## 0.5.2 - 2026-09-03
 
 - Regenerate the release workflow with maelys-release 0.2.2, whose caller

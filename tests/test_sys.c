@@ -21,7 +21,7 @@
 } while (0)
 
 static int test_version_and_results(void) {
-    ASSERT_TRUE(strcmp(maelys_sys_version_string(), "0.5.2") == 0);
+    ASSERT_TRUE(strcmp(maelys_sys_version_string(), "0.5.3") == 0);
     ASSERT_TRUE(maelys_sys_abi_version() == 1u);
     ASSERT_TRUE(strcmp(maelys_sys_result_string(MAELYS_SYS_OK), "ok") == 0);
     return 0;
