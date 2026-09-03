@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cc: gcc
+            cxx: g++
+          - runner: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+          - runner: ubuntu-24.04-arm
+            cc: gcc
+            cxx: g++
+          - runner: ubuntu-24.04-arm
+            cc: clang
+            cxx: clang++
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test
+        run: make clean check CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+      - name: Verify architecture
+        run: uname -m
+      - name: Install smoke test
+        run: make install-check CC=${{ matrix.cc }}
+      - name: Release socle drift
+        if: matrix.runner == 'ubuntu-24.04' && matrix.cc == 'clang'
+        run: |
+          set -euo pipefail
+          sha="$(sed -n 's|.*maelys-release/.github/workflows/release.yml@\([0-9a-f]\{40\}\).*|\1|p' .github/workflows/release.yml)"
+          test -n "$sha"
+          git clone -q https://github.com/maelys-dev/maelys-release.git "$RUNNER_TEMP/maelys-release"
+          git -C "$RUNNER_TEMP/maelys-release" checkout -q "$sha"
+          "$RUNNER_TEMP/maelys-release/scripts/adopt.sh" . --product maelys-system --check
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Build and test
+        run: make clean check CC=clang CXX=clang++
+      - name: Install smoke test
+        run: make install-check CC=clang
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: ASan and UBSan
+        run: make asan-ubsan CC=clang CXX=clang++
+      - name: TSan
+        run: make tsan CC=clang CXX=clang++
+      - name: Static analyzer
+        run: make analyze CC=clang
+
+  mutation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Kill targeted reactor mutants
+        run: make mutation-check CC=clang CXX=clang++
+
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install optional comparison libraries
+        run: sudo apt-get update && sudo apt-get install -y libevent-dev libev-dev
+      - name: Run informational benchmark
+        run: BENCH_ITERATIONS=25000 make benchmark CC=clang
+      - uses: actions/upload-artifact@v7
+        with:
+          name: reactor-benchmark
+          path: build/release/benchmarks/results.csv
+
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install RPM packaging tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - run: make check dist package-linux
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages-${{ runner.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/*.deb
+            dist/*.rpm
+
+  package-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: make check dist package-release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-packages-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/homebrew/*.rb

@@ -1,0 +1,32 @@
+name: release
+
+# Managed by maelys-release v0.2.1 (0.2.1). Regenerate with
+# scripts/adopt.sh of maelys-release; do not edit by hand.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: maelys-dev/maelys-release/.github/workflows/release.yml@d25b2ebf19980139e6b8c0836fe6f8c1e48b063e # v0.2.1
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      product: maelys-system
+
+  tap-libmaelys-sys:
+    needs: release
+    uses: maelys-dev/maelys-release/.github/workflows/tap.yml@d25b2ebf19980139e6b8c0836fe6f8c1e48b063e # v0.2.1
+    permissions:
+      contents: write
+    with:
+      product: libmaelys-sys
+      bottles: '["macos-15","macos-26"]'
+    secrets:
+      tap_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      tap_signing_key: ${{ secrets.HOMEBREW_TAP_SIGNING_KEY }}

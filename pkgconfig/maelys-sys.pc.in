@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: maelys-sys
+Description: Small POSIX systems foundation for Maelys components
+Version: @VERSION@
+Libs: -L${libdir} -lmaelys_sys -pthread
+Cflags: -I${includedir}
+
