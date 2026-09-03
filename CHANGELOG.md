@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 - 2026-09-03
 
+- The public repository restarts its history at the 0.5.1 tree, the first
+  MPL-2.0 release; the MIT-licensed history up to 0.5.0 lives in the private
+  repository maelys-dev/maelys-system-archive. The v0.5.3 release and its
+  bottles were published by that archived repository: this release replaces
+  them, and Egress re-pins to it.
 - Regenerate the release workflow with maelys-release 0.2.6: the shared tap
   is tapped before bottles are built, and `workflow_dispatch` with a `tag`
   input replays the Homebrew publication of an existing tag.
