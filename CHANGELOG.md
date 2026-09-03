@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 - 2026-09-03
+
+- Regenerate the release workflow with maelys-release 0.2.2, whose caller
+  declares the permission ceiling GitHub requires for reusable workflows.
+  The `v0.5.1` tag exists but produced no release: its workflow failed at
+  startup on that rule; this is the first release published through the
+  shared socle.
+
 ## 0.5.1 - 2026-09-03
 
 - Relicense the repository from MIT to MPL-2.0 (`LICENSE`, `LICENSING.md`,
