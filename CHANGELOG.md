@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.5 - 2026-09-03
 
 - A cross-thread wake is never lost: when the caller's event array is already
   full, `maelys_sys_loop_step` leaves the wakeup pending for the next step
