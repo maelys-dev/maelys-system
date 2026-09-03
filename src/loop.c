@@ -13,6 +13,11 @@ typedef struct watch_slot {
     maelys_sys_token_t token;
     uint32_t generation;
     int active;
+    /* Step serial that last produced an event for this slot, and where that
+     * event sits in the caller's array, so a backend reporting directions
+     * separately (kqueue) still yields one event per watch and per step. */
+    uint64_t seen_step;
+    size_t event_index;
 } watch_slot_t;
 
 typedef struct timer_slot {
@@ -33,6 +38,7 @@ struct maelys_sys_loop {
     void *backend;
     maelys_sys_wakeup_t *wakeup;
     atomic_int stopped;
+    uint64_t step_serial;
 
     watch_slot_t *watches;
     size_t watch_capacity;
@@ -225,6 +231,8 @@ maelys_sys_result_t maelys_sys_loop_unwatch(
     slot->fd = -1;
     slot->interests = 0;
     slot->token = 0;
+    slot->seen_step = 0;
+    slot->event_index = 0;
     slot->generation = next_generation(slot->generation);
     return MAELYS_SYS_OK;
 }
@@ -449,24 +457,35 @@ maelys_sys_result_t maelys_sys_loop_step(
         if (result == MAELYS_SYS_ERR_OS && errno == EINTR) continue;
         if (result != MAELYS_SYS_OK) return result;
         size_t produced = 0;
+        uint64_t serial = ++loop->step_serial;
         for (size_t i = 0; i < raw_count; ++i) {
             maelys_sys_backend_event_t *raw = &loop->raw_events[i];
             if (raw->watch_id == 0) {
+                if (produced == event_capacity) {
+                    /* No room: leave the pipe readable so the next step
+                     * reports the wake instead of consuming and losing it. */
+                    continue;
+                }
                 result = maelys_sys_wakeup_consume(loop->wakeup);
                 if (result != MAELYS_SYS_OK) return result;
                 if (atomic_load_explicit(&loop->stopped, memory_order_acquire)) {
                     *out_step_result = MAELYS_SYS_STEP_STOPPED;
                     return MAELYS_SYS_OK;
                 }
-                if (produced < event_capacity) {
-                    events[produced++] = (maelys_sys_event_t){
-                        .token = 0, .flags = MAELYS_SYS_EVENT_WAKE
-                    };
-                }
+                events[produced++] = (maelys_sys_event_t){
+                    .token = 0, .flags = MAELYS_SYS_EVENT_WAKE
+                };
                 continue;
             }
             watch_slot_t *slot = find_watch(loop, raw->watch_id);
-            if (!slot || !raw->flags || produced == event_capacity) continue;
+            if (!slot || !raw->flags) continue;
+            if (slot->seen_step == serial) {
+                events[slot->event_index].flags |= raw->flags;
+                continue;
+            }
+            if (produced == event_capacity) continue;
+            slot->seen_step = serial;
+            slot->event_index = produced;
             events[produced++] = (maelys_sys_event_t){
                 .token = slot->token,
                 .flags = raw->flags

@@ -35,10 +35,15 @@ maelys_sys_result_t maelys_sys_socket_create(
 int maelys_sys_socket_native_fd(const maelys_sys_socket_t *socket_handle);
 
 /*
- * The address is borrowed only for the duration of the call. A start may be
- * performed exactly once per socket. IN_PROGRESS requires the caller to wait
- * for write/error readiness and then call connect_complete. On ERR_OS, errno
- * identifies connect(2) or SO_ERROR. No address retry is attempted.
+ * The address is borrowed only for the duration of the call. A start that
+ * reaches the kernel may be performed exactly once per socket. IN_PROGRESS
+ * requires the caller to wait for write/error readiness and then call
+ * connect_complete. On ERR_OS, errno identifies connect(2) or SO_ERROR. When
+ * connect(2) fails with EAGAIN or EWOULDBLOCK (Linux AF_UNIX with a full
+ * backlog) nothing was started: the handle stays fresh and a later start is
+ * allowed. connect_complete called before readiness, while no peer exists
+ * yet, is ERR_STATE and may be retried after readiness. No address retry is
+ * attempted.
  */
 maelys_sys_result_t maelys_sys_socket_connect_start(
     maelys_sys_socket_t *socket_handle,
@@ -76,11 +81,30 @@ maelys_sys_result_t maelys_sys_socket_shutdown(
     int how);
 
 /*
+ * Options applied before bind(2). Zero-initialize the structure (`= {0}`):
+ * every field defaults to off, and fields added by a later minor release
+ * default to off as well. reuse_address sets SO_REUSEADDR; the contracted
+ * effect is rebinding a local address still held by TIME_WAIT connections.
+ * Other consequences of the option (BSD and Linux differ on overlapping
+ * binds) are native behavior, not part of this contract. When the option
+ * cannot be applied the call fails with ERR_OS before bind(2) runs.
+ */
+typedef struct maelys_sys_socket_bind_options {
+    int reuse_address;
+} maelys_sys_socket_bind_options_t;
+
+/*
  * Mechanical server operations. Address storage follows the native POSIX
  * bind/accept lifetime rules. listen backlog must be non-negative. Accepted
  * handles have the same non-blocking, CLOEXEC and SIGPIPE guarantees as
  * socket_create. No listener policy or connection limit is implied.
+ * socket_bind is socket_bind_with and NULL options.
  */
+maelys_sys_result_t maelys_sys_socket_bind_with(
+    maelys_sys_socket_t *socket_handle,
+    const struct sockaddr *address,
+    socklen_t address_length,
+    const maelys_sys_socket_bind_options_t *options);
 maelys_sys_result_t maelys_sys_socket_bind(
     maelys_sys_socket_t *socket_handle,
     const struct sockaddr *address,

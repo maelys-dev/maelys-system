@@ -120,19 +120,27 @@ maelys_sys_result_t maelys_sys_socket_connect_start(
     if (socket_handle->connect_started || socket_handle->shutdown_directions) {
         return MAELYS_SYS_ERR_STATE;
     }
-    socket_handle->connect_started = 1;
     do {
         status = connect(socket_handle->fd, address, address_length);
     } while (status != 0 && errno == EINTR);
     if (status == 0 || errno == EISCONN) {
+        socket_handle->connect_started = 1;
         socket_handle->connect_complete = 1;
         *out_state = MAELYS_SYS_CONNECT_CONNECTED;
         return MAELYS_SYS_OK;
     }
-    if (errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK) {
+    if (errno == EINPROGRESS || errno == EALREADY) {
+        socket_handle->connect_started = 1;
         *out_state = MAELYS_SYS_CONNECT_IN_PROGRESS;
         return MAELYS_SYS_OK;
     }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        /* Nothing was started (Linux AF_UNIX with a full backlog): there is
+         * no completion to wait for, and the handle stays fresh so the
+         * caller may start again later. */
+        return MAELYS_SYS_ERR_OS;
+    }
+    socket_handle->connect_started = 1;
     socket_handle->connect_error = errno;
     return MAELYS_SYS_ERR_OS;
 }
@@ -158,6 +166,16 @@ maelys_sys_result_t maelys_sys_socket_connect_complete(
         socket_handle->connect_error = error;
         errno = error;
         return MAELYS_SYS_ERR_OS;
+    }
+    {
+        /* A clear SO_ERROR is not a connection: confirm a peer exists so a
+         * completion attempted before readiness is reported as such. */
+        struct sockaddr_storage peer;
+        socklen_t peer_length = (socklen_t)sizeof(peer);
+        if (getpeername(socket_handle->fd, (struct sockaddr *)(void *)&peer,
+                        &peer_length) != 0) {
+            return errno == ENOTCONN ? MAELYS_SYS_ERR_STATE : MAELYS_SYS_ERR_OS;
+        }
     }
     socket_handle->connect_complete = 1;
     return MAELYS_SYS_OK;
@@ -228,16 +246,32 @@ maelys_sys_result_t maelys_sys_socket_shutdown(
     return MAELYS_SYS_OK;
 }
 
-maelys_sys_result_t maelys_sys_socket_bind(
+maelys_sys_result_t maelys_sys_socket_bind_with(
     maelys_sys_socket_t *socket_handle,
     const struct sockaddr *address,
-    socklen_t address_length) {
+    socklen_t address_length,
+    const maelys_sys_socket_bind_options_t *options) {
     if (!socket_handle || socket_handle->fd < 0 || !address ||
         address_length == 0) {
         return MAELYS_SYS_ERR_ARGUMENT;
     }
+    if (options && options->reuse_address) {
+        int enabled = 1;
+        if (setsockopt(socket_handle->fd, SOL_SOCKET, SO_REUSEADDR,
+                       &enabled, sizeof(enabled)) != 0) {
+            return MAELYS_SYS_ERR_OS;
+        }
+    }
     return bind(socket_handle->fd, address, address_length) == 0 ?
         MAELYS_SYS_OK : MAELYS_SYS_ERR_OS;
+}
+
+maelys_sys_result_t maelys_sys_socket_bind(
+    maelys_sys_socket_t *socket_handle,
+    const struct sockaddr *address,
+    socklen_t address_length) {
+    return maelys_sys_socket_bind_with(
+        socket_handle, address, address_length, NULL);
 }
 
 maelys_sys_result_t maelys_sys_socket_listen(

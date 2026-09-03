@@ -87,6 +87,14 @@ maelys_sys_result_t maelys_sys_loop_timer_cancel(
  * are the only cross-thread operations. The loop never invokes callbacks.
  * step accepts MAELYS_SYS_DEADLINE_INFINITE and then waits for an event, timer,
  * wake or stop without imposing its own deadline.
+ *
+ * Every backend reports the same events. A watch yields at most one event per
+ * step, whose flags combine every ready direction. HUP is set when the peer
+ * closed its writing side or the connection ended; READ usually accompanies
+ * it and a read then returns the remaining bytes and then end of stream.
+ * Readiness is level-triggered: what does not fit in events is reported by a
+ * later step. A wake that does not fit is left pending rather than consumed,
+ * so it is never lost.
  */
 maelys_sys_result_t maelys_sys_loop_step(
     maelys_sys_loop_t *loop,
