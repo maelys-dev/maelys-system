@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Regenerate the release workflow with maelys-release 0.2.6: the shared tap
+  is tapped before bottles are built, and `workflow_dispatch` with a `tag`
+  input replays the Homebrew publication of an existing tag.
+- Regenerate the release workflow with maelys-release 0.2.5 (staging tap
+  trusted before the bottle digests are merged; `SHA256SUMS` lists only the
+  archives that exist).
+
 ## 0.5.3 - 2026-09-03
 
 - Regenerate the release workflow with maelys-release 0.2.3, which grants

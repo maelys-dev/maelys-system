@@ -6,7 +6,7 @@ description: Release a Maelys product through the shared maelys-release socle, o
 # Releasing a Maelys product
 
 The product is `maelys-system`; its release mechanics come from maelys-release
-v0.2.3 (`docs/conventions.md` there is normative).
+v0.2.6 (`docs/conventions.md` there is normative).
 
 ## Cut a release
 
