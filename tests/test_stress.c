@@ -13,7 +13,12 @@
     } \
 } while (0)
 
-enum { PAIR_COUNT = 128, TIMER_COUNT = 2048, GENERATION_COUNT = 10000 };
+enum {
+    PAIR_COUNT = 128,
+    TIMER_COUNT = 2048,
+    GENERATION_COUNT = 10000,
+    REARM_COUNT = 100000
+};
 
 static int readiness_stress(maelys_sys_loop_backend_t backend) {
     maelys_sys_loop_t *loop = NULL;
@@ -112,11 +117,51 @@ static int timer_and_generation_stress(void) {
     return 0;
 }
 
+/*
+ * A timeout re-armed on every packet: add a far timer, cancel the previous
+ * one, many times. The heap must not keep every cancelled node, and the
+ * one live timer must still fire first when it is due.
+ */
+static int timer_rearm_stress(void) {
+    maelys_sys_loop_t *loop = NULL;
+    CHECK(maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) == MAELYS_SYS_OK);
+    uint64_t now = 0;
+    CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+    maelys_sys_timer_t previous = 0;
+    for (size_t i = 0; i < REARM_COUNT; ++i) {
+        maelys_sys_timer_t timer = 0;
+        CHECK(maelys_sys_loop_timer_add(loop, now + 60000u + (uint64_t)i,
+            (maelys_sys_token_t)(i + 1u), &timer) == MAELYS_SYS_OK);
+        if (previous) {
+            CHECK(maelys_sys_loop_timer_cancel(loop, previous) == MAELYS_SYS_OK);
+        }
+        previous = timer;
+    }
+    maelys_sys_timer_t due = 0;
+    CHECK(maelys_sys_loop_timer_add(loop, now, 7, &due) == MAELYS_SYS_OK);
+    maelys_sys_event_t event;
+    size_t count = 0;
+    maelys_sys_step_result_t step = MAELYS_SYS_STEP_TIMEOUT;
+    CHECK(maelys_sys_loop_step(loop, now, &event, 1, &count, &step) ==
+        MAELYS_SYS_OK);
+    CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 1);
+    CHECK(event.token == 7 && event.flags == MAELYS_SYS_EVENT_TIMER);
+    /* The surviving far timer is still live, every cancelled one is gone. */
+    CHECK(maelys_sys_loop_timer_cancel(loop, previous) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_step(loop, now, &event, 1, &count, &step) ==
+        MAELYS_SYS_OK);
+    CHECK(step == MAELYS_SYS_STEP_TIMEOUT && count == 0);
+    CHECK(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
+    return 0;
+}
+
 int main(void) {
     if (readiness_stress(MAELYS_SYS_LOOP_POLL) != 0) return 1;
     if (readiness_stress(MAELYS_SYS_LOOP_AUTO) != 0) return 1;
     if (timer_and_generation_stress() != 0) return 1;
+    if (timer_rearm_stress() != 0) return 1;
     puts("ok - readiness stress");
     puts("ok - timer and generation stress");
+    puts("ok - timer re-arm stress");
     return 0;
 }

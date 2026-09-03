@@ -13,7 +13,13 @@ CXXFLAGS ?= -O2 -g
 WARNINGS := -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
 	-Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 COMMON_CPPFLAGS := -Iinclude -I.
-COMMON_CFLAGS := -std=c11 $(WARNINGS) -pthread
+# Clang honors a (void) cast on warn_unused_result; GCC does not, so the
+# strict result check is enforced by the Clang builds of the CI matrix.
+ifneq (,$(findstring clang,$(shell $(CC) --version 2>/dev/null)))
+COMMON_CPPFLAGS += -DMAELYS_SYS_STRICT_RESULTS
+endif
+COMMON_CFLAGS := -std=c11 $(WARNINGS) -pthread -fPIC
+TEST_CPPFLAGS = -DMAELYS_SYS_EXPECTED_VERSION='"$(VERSION)"'
 COMMON_CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -Werror
 
 VERSION := $(shell sed -n '1p' VERSION)
@@ -50,19 +56,17 @@ all: $(LIB)
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJECTS:.o=.d)
 
 $(LIB): $(OBJECTS)
 	@mkdir -p $(@D)
 	$(AR) rcs $@ $^
 
-$(TEST): tests/test_sys.c $(LIB)
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
-
 $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BUILD)/examples/%: examples/%.c $(LIB)
 	@mkdir -p $(@D)
@@ -135,9 +139,14 @@ tsan:
 	$(MAKE) clean
 	$(MAKE) check BUILD=build/tsan CFLAGS='-O1 -g -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
 
+# Findings are errors. BlockInCriticalSection is disabled: it flags the
+# non-blocking read of the wakeup pipe under the wakeup mutex.
 analyze:
 	@for source in $(SOURCES); do \
 		$(CC) --analyze -Xanalyzer -analyzer-output=text \
+			-Xanalyzer -analyzer-werror \
+			-Xanalyzer -analyzer-disable-checker \
+			-Xanalyzer unix.BlockInCriticalSection \
 			$(CPPFLAGS) $(COMMON_CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
 	done
 

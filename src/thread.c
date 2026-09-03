@@ -1,6 +1,10 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+/* Exposes pthread_cond_timedwait_relative_np under -std=c11 on macOS. */
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "src/internal.h"
 
@@ -9,15 +13,17 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef __APPLE__
-extern int pthread_cond_timedwait_relative_np(
-    pthread_cond_t *, pthread_mutex_t *, const struct timespec *);
+/* Linux refuses names longer than 15 bytes with ERANGE instead of truncating. */
+#if defined(__linux__)
+#define THREAD_NAME_LIMIT 15u
+#else
+#define THREAD_NAME_LIMIT 63u
 #endif
 
 typedef struct thread_start {
     maelys_sys_thread_fn function;
     void *context;
-    char name[64];
+    char name[THREAD_NAME_LIMIT + 1u];
 } thread_start_t;
 
 maelys_sys_result_t maelys_sys_mutex_create(maelys_sys_mutex_t **out_mutex) {
