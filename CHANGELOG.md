@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- A cross-thread wake is never lost: when the caller's event array is already
+  full, `maelys_sys_loop_step` leaves the wakeup pending for the next step
+  instead of consuming it silently (epoll and kqueue ordered the wake after
+  descriptor events, poll happened to order it first).
+- A watch yields at most one event per step on every backend; kqueue reported
+  one event per direction for a READ|WRITE watch.
+- The poll backend requests `POLLRDHUP` on Linux and reports a peer half-close
+  as `HUP`, as epoll and kqueue already did.
+- `maelys_sys_socket_connect_start` no longer reports `EAGAIN` as in progress:
+  on Linux AF_UNIX with a full backlog nothing was started, the call now
+  fails with `ERR_OS` and the handle stays reusable. `connect_complete`
+  confirms a peer exists and returns `ERR_STATE` when called before
+  readiness instead of a false success.
+- Add `maelys_sys_socket_bind_with` and `maelys_sys_socket_bind_options_t`
+  (`reuse_address` sets `SO_REUSEADDR` before bind). `maelys_sys_socket_bind`
+  is unchanged and equals NULL options. ABI 1 is preserved.
+- The `tcp-relay` example uses the socket handle API end to end, including
+  `bind_with`, instead of native calls.
+- Add a backend parity test (`tests/test_backends.c`) that runs peer
+  half-close, merged directions and wake-with-full-array on poll and on the
+  native backend, and a sixth reactor mutant for the wake path.
 - Regenerate the release workflow with maelys-release 0.2.8 (the tap publish
   job no longer trips on a duplicate formula class).
 

@@ -74,7 +74,10 @@ the optional umbrella header `maelys/sys.h`.
 `maelys_sys_loop` returns readiness events; it never invokes callbacks. Watches
 borrow descriptors and carry generation-checked identities. Timers are one-shot
 absolute monotonic deadlines. All mutation and `step` calls belong to the
-creating thread; only `wake` and idempotent `stop` may cross threads.
+creating thread; only `wake` and idempotent `stop` may cross threads. Every
+backend reports the same events: at most one per watch and per step, `HUP` on
+peer half-close, and a wake that does not fit in the caller's array stays
+pending rather than being lost.
 
 `poll` is the reference backend. Linux selects `epoll`; macOS selects `kqueue`.
 The test suite runs every available backend against the same behavior and adds

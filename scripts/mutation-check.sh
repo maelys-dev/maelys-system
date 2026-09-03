@@ -46,5 +46,7 @@ run_mutant caller-deadline-wins-over-timer \
     'loop->timer_heap[0].deadline_ms > effective'
 run_mutant timer-token-lost \
     '.token = slot->token,' '.token = 0,'
+run_mutant wake-consumed-when-full \
+    'if (produced == event_capacity) {' 'if (0) {'
 
-printf '%s\n' "mutation check: 5/5 killed"
+printf '%s\n' "mutation check: 6/6 killed"

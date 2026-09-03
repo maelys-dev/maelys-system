@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -45,7 +46,9 @@ static int test_socket_lifecycle(void) {
     socklen_t address_length = (socklen_t)sizeof(address);
     maelys_sys_connect_state_t connect_state;
     int listener_fd;
-    int enabled = 1;
+    int option_value = 0;
+    socklen_t option_length = (socklen_t)sizeof(option_value);
+    maelys_sys_socket_bind_options_t bind_options = {0};
     char buffer[16] = {0};
     size_t transferred = 0u;
 
@@ -53,6 +56,8 @@ static int test_socket_lifecycle(void) {
         AF_INET, SOCK_STREAM, IPPROTO_TCP, &listener) == MAELYS_SYS_OK);
     ASSERT_TRUE(maelys_sys_socket_create(
         AF_INET, SOCK_STREAM, IPPROTO_TCP, &unconnected) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_connect_complete(unconnected) ==
+        MAELYS_SYS_ERR_STATE);
     ASSERT_TRUE(maelys_sys_socket_shutdown(
         unconnected, SHUT_RDWR) == MAELYS_SYS_OK);
     ASSERT_TRUE(maelys_sys_socket_shutdown(
@@ -78,15 +83,22 @@ static int test_socket_lifecycle(void) {
         ASSERT_TRUE(protected_value == 1);
     }
 #endif
-    ASSERT_TRUE(setsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR,
-        &enabled, sizeof(enabled)) == 0);
+    ASSERT_TRUE(getsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR,
+        &option_value, &option_length) == 0);
+    ASSERT_TRUE(option_value == 0);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
-    ASSERT_TRUE(maelys_sys_socket_bind(listener,
+    bind_options.reuse_address = 1;
+    ASSERT_TRUE(maelys_sys_socket_bind_with(listener,
         (const struct sockaddr *)&address,
-        (socklen_t)sizeof(address)) == MAELYS_SYS_OK);
+        (socklen_t)sizeof(address), &bind_options) == MAELYS_SYS_OK);
+    option_value = 0;
+    option_length = (socklen_t)sizeof(option_value);
+    ASSERT_TRUE(getsockopt(listener_fd, SOL_SOCKET, SO_REUSEADDR,
+        &option_value, &option_length) == 0);
+    ASSERT_TRUE(option_value != 0);
     ASSERT_TRUE(maelys_sys_socket_listen(listener, 4) == MAELYS_SYS_OK);
     ASSERT_TRUE(getsockname(listener_fd, (struct sockaddr *)&address,
         &address_length) == 0);
@@ -144,6 +156,122 @@ static int test_socket_lifecycle(void) {
     ASSERT_TRUE(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
     ASSERT_TRUE(listener == NULL);
     ASSERT_TRUE(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
+    return 0;
+}
+
+static int test_socket_connect_refused(void) {
+    maelys_sys_socket_t *listener = NULL;
+    maelys_sys_socket_t *client = NULL;
+    struct sockaddr_in address;
+    socklen_t address_length = (socklen_t)sizeof(address);
+    maelys_sys_connect_state_t state;
+    maelys_sys_result_t result;
+
+    /* Reserve a loopback port, then close it so the connect is refused. */
+    ASSERT_TRUE(maelys_sys_socket_create(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, &listener) == MAELYS_SYS_OK);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_TRUE(maelys_sys_socket_bind(listener,
+        (const struct sockaddr *)&address,
+        (socklen_t)sizeof(address)) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_listen(listener, 1) == MAELYS_SYS_OK);
+    ASSERT_TRUE(getsockname(maelys_sys_socket_native_fd(listener),
+        (struct sockaddr *)&address, &address_length) == 0);
+    ASSERT_TRUE(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
+
+    ASSERT_TRUE(maelys_sys_socket_create(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) == MAELYS_SYS_OK);
+    errno = 0;
+    result = maelys_sys_socket_connect_start(client,
+        (const struct sockaddr *)&address, address_length, &state);
+    if (result == MAELYS_SYS_OK) {
+        ASSERT_TRUE(state == MAELYS_SYS_CONNECT_IN_PROGRESS);
+        ASSERT_TRUE(wait_descriptor(
+            maelys_sys_socket_native_fd(client), POLLOUT));
+    } else {
+        ASSERT_TRUE(result == MAELYS_SYS_ERR_OS && errno == ECONNREFUSED);
+    }
+    errno = 0;
+    ASSERT_TRUE(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_ERR_OS);
+    ASSERT_TRUE(errno == ECONNREFUSED);
+    /* The failure is remembered and the start was consumed. */
+    errno = 0;
+    ASSERT_TRUE(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_ERR_OS);
+    ASSERT_TRUE(errno == ECONNREFUSED);
+    ASSERT_TRUE(maelys_sys_socket_connect_start(client,
+        (const struct sockaddr *)&address, address_length, &state) ==
+        MAELYS_SYS_ERR_STATE);
+    ASSERT_TRUE(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
+    return 0;
+}
+
+/*
+ * AF_UNIX with a zero backlog. Linux answers EAGAIN once the backlog is full
+ * and nothing is started; macOS accepts every connection. Either way a
+ * handle reported connected must be able to send.
+ */
+static int test_socket_unix_backlog(void) {
+    maelys_sys_socket_t *listener = NULL;
+    maelys_sys_socket_t *clients[8] = {0};
+    struct sockaddr_un address;
+    maelys_sys_connect_state_t state;
+    size_t written = 0;
+    int refused = 0;
+
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof(address.sun_path),
+        "/tmp/maelys-sys-test-%ld.sock", (long)getpid());
+    (void)unlink(address.sun_path);
+    ASSERT_TRUE(maelys_sys_socket_create(
+        AF_UNIX, SOCK_STREAM, 0, &listener) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_bind(listener,
+        (const struct sockaddr *)&address,
+        (socklen_t)sizeof(address)) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_listen(listener, 0) == MAELYS_SYS_OK);
+
+    for (size_t i = 0; i < 8; ++i) {
+        maelys_sys_result_t result;
+        ASSERT_TRUE(maelys_sys_socket_create(
+            AF_UNIX, SOCK_STREAM, 0, &clients[i]) == MAELYS_SYS_OK);
+        errno = 0;
+        result = maelys_sys_socket_connect_start(clients[i],
+            (const struct sockaddr *)&address, (socklen_t)sizeof(address),
+            &state);
+        if (result == MAELYS_SYS_ERR_OS) {
+            ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+            /* Nothing started: the handle is fresh, a new start is legal. */
+            ASSERT_TRUE(maelys_sys_socket_connect_complete(clients[i]) ==
+                MAELYS_SYS_ERR_STATE);
+            ASSERT_TRUE(maelys_sys_socket_connect_start(clients[i],
+                (const struct sockaddr *)&address, (socklen_t)sizeof(address),
+                &state) != MAELYS_SYS_ERR_STATE);
+            ++refused;
+            continue;
+        }
+        ASSERT_TRUE(result == MAELYS_SYS_OK);
+        if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
+            ASSERT_TRUE(wait_descriptor(
+                maelys_sys_socket_native_fd(clients[i]), POLLOUT));
+        }
+        ASSERT_TRUE(maelys_sys_socket_connect_complete(clients[i]) ==
+            MAELYS_SYS_OK);
+        ASSERT_TRUE(maelys_sys_socket_send(
+            clients[i], "x", 1u, &written) == MAELYS_SYS_OK);
+        ASSERT_TRUE(written == 1u);
+    }
+#if defined(__linux__)
+    ASSERT_TRUE(refused > 0);
+#else
+    (void)refused;
+#endif
+    for (size_t i = 0; i < 8; ++i) {
+        ASSERT_TRUE(maelys_sys_socket_release(&clients[i]) == MAELYS_SYS_OK);
+    }
+    ASSERT_TRUE(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
+    ASSERT_TRUE(unlink(address.sun_path) == 0);
     return 0;
 }
 
@@ -569,6 +697,8 @@ int main(void) {
         test_clock_and_deadlines,
         test_fd_contracts,
         test_socket_lifecycle,
+        test_socket_connect_refused,
+        test_socket_unix_backlog,
         test_socket_send,
         test_socket_send_deadline,
         test_wakeup,
@@ -580,6 +710,8 @@ int main(void) {
         "clock and deadlines",
         "fd contracts",
         "socket lifecycle",
+        "socket connect refused",
+        "socket unix backlog",
         "socket send",
         "socket send deadline",
         "wakeup",

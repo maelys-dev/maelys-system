@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "src/loop_backend.h"
 
 #include <errno.h>
@@ -20,6 +24,11 @@ typedef struct poll_context {
 
 static short poll_interests(unsigned interests) {
     short events = 0;
+#ifdef POLLRDHUP
+    /* Peer half-close surfaces as HUP, as epoll (EPOLLRDHUP) and kqueue
+     * (EV_EOF) already report it. */
+    events = (short)(events | POLLRDHUP);
+#endif
     if (interests & MAELYS_SYS_INTEREST_READ) events |= POLLIN;
     if (interests & MAELYS_SYS_INTEREST_WRITE) events |= POLLOUT;
     return events;
@@ -108,6 +117,9 @@ static unsigned poll_flags(short revents) {
     if (revents & (POLLIN | POLLPRI)) flags |= MAELYS_SYS_EVENT_READ;
     if (revents & POLLOUT) flags |= MAELYS_SYS_EVENT_WRITE;
     if (revents & POLLHUP) flags |= MAELYS_SYS_EVENT_HUP;
+#ifdef POLLRDHUP
+    if (revents & POLLRDHUP) flags |= MAELYS_SYS_EVENT_HUP;
+#endif
     if (revents & (POLLERR | POLLNVAL)) flags |= MAELYS_SYS_EVENT_ERROR;
     return flags;
 }
