@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Regenerate the release workflow with maelys-release 0.2.7 (the tap publish
-  job no longer trips on the previous formula of the shared tap).
+- Regenerate the release workflow with maelys-release 0.2.8 (the tap publish
+  job no longer trips on a duplicate formula class).
 
 ## 0.5.4 - 2026-09-03
 
