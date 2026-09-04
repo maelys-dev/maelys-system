@@ -1,0 +1,9 @@
+# Packages the build needs on the release and CI runners, one per line.
+# The socle installs its own packaging tools (build-essential dpkg-dev
+# file rpm) in front of these. python3 runs scripts/examples-check.sh,
+# scripts/test-tcp-relay.py and scripts/mutation-check.sh.
+
+[linux]
+python3
+
+[macos]
