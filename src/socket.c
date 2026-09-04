@@ -320,6 +320,26 @@ maelys_sys_result_t maelys_sys_socket_accept(
     return result;
 }
 
+maelys_sys_result_t maelys_sys_socket_detach(
+    maelys_sys_socket_t **socket_handle,
+    int *out_fd) {
+    maelys_sys_socket_t *owned;
+    if (out_fd) *out_fd = -1;
+    if (!socket_handle || !*socket_handle || !out_fd) {
+        return MAELYS_SYS_ERR_ARGUMENT;
+    }
+    owned = *socket_handle;
+    if (owned->connect_started && !owned->connect_complete &&
+        !owned->connect_error) {
+        return MAELYS_SYS_ERR_STATE;
+    }
+    *socket_handle = NULL;
+    *out_fd = owned->fd;
+    memset(owned, 0, sizeof(*owned));
+    free(owned);
+    return MAELYS_SYS_OK;
+}
+
 maelys_sys_result_t maelys_sys_socket_release(
     maelys_sys_socket_t **socket_handle) {
     maelys_sys_socket_t *owned;
