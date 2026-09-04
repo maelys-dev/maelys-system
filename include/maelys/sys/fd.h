@@ -11,11 +11,18 @@
 extern "C" {
 #endif
 
-maelys_sys_result_t maelys_sys_fd_set_cloexec(int fd);
-maelys_sys_result_t maelys_sys_fd_set_nonblocking(int fd);
-maelys_sys_result_t maelys_sys_fd_set_blocking(int fd);
-maelys_sys_result_t maelys_sys_pipe_cloexec(int out_fds[2]);
-maelys_sys_result_t maelys_sys_socketpair_cloexec(
+/*
+ * Close-on-exec is set atomically with creation on Linux (pipe2, SOCK_CLOEXEC,
+ * accept4). macOS has no such calls: the flag is applied right after
+ * creation, and a fork+exec racing in another thread can inherit the
+ * descriptor. A consumer that launches processes closes descriptors after
+ * fork rather than relying on the flag alone.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_set_cloexec(int fd);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_set_nonblocking(int fd);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_set_blocking(int fd);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_pipe_cloexec(int out_fds[2]);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socketpair_cloexec(
     int type,
     int out_fds[2]);
 
@@ -24,7 +31,7 @@ maelys_sys_result_t maelys_sys_socketpair_cloexec(
  * retry can close an unrelated descriptor if the number was already reused.
  * NULL and an already-negative descriptor are idempotent successes.
  */
-maelys_sys_result_t maelys_sys_fd_close(int *fd);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_close(int *fd);
 
 /*
  * Socket-only I/O. On success, *out_written may be shorter than length.
@@ -32,7 +39,7 @@ maelys_sys_result_t maelys_sys_fd_close(int *fd);
  * that only provide SO_NOSIGPIPE, the function enables that persistent socket
  * option as a documented portability fallback.
  */
-maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
     int fd,
     const void *bytes,
     size_t length,
@@ -44,7 +51,7 @@ maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
  * buffer, fd must be a socket in non-blocking mode and must remain so for the
  * duration of the call; blocking sockets are rejected with ERR_ARGUMENT.
  */
-maelys_sys_result_t maelys_sys_socket_send_all_until(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send_all_until(
     int fd,
     const void *bytes,
     size_t length,

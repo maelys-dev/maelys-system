@@ -16,6 +16,7 @@ typedef uint64_t maelys_sys_watch_t;
 typedef uint64_t maelys_sys_timer_t;
 typedef uint64_t maelys_sys_token_t;
 
+/* AUTO is the native backend of the host (epoll, kqueue), else poll. */
 typedef enum maelys_sys_loop_backend {
     MAELYS_SYS_LOOP_AUTO = 0,
     MAELYS_SYS_LOOP_POLL,
@@ -49,23 +50,23 @@ typedef enum maelys_sys_step_result {
 } maelys_sys_step_result_t;
 
 int maelys_sys_loop_backend_available(maelys_sys_loop_backend_t backend);
-maelys_sys_result_t maelys_sys_loop_create(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_create(
     maelys_sys_loop_backend_t backend,
     maelys_sys_loop_t **out_loop);
 const char *maelys_sys_loop_backend_name(const maelys_sys_loop_t *loop);
 
 /* The loop borrows fd. The owner must unwatch before closing it. */
-maelys_sys_result_t maelys_sys_loop_watch_fd(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_watch_fd(
     maelys_sys_loop_t *loop,
     int fd,
     unsigned interests,
     maelys_sys_token_t token,
     maelys_sys_watch_t *out_watch);
-maelys_sys_result_t maelys_sys_loop_modify(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_modify(
     maelys_sys_loop_t *loop,
     maelys_sys_watch_t watch,
     unsigned interests);
-maelys_sys_result_t maelys_sys_loop_unwatch(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_unwatch(
     maelys_sys_loop_t *loop,
     maelys_sys_watch_t watch);
 
@@ -73,12 +74,12 @@ maelys_sys_result_t maelys_sys_loop_unwatch(
  * Timers are one-shot and use CLOCK_MONOTONIC absolute milliseconds.
  * MAELYS_SYS_DEADLINE_INFINITE is not a timer deadline and is rejected.
  */
-maelys_sys_result_t maelys_sys_loop_timer_add(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_timer_add(
     maelys_sys_loop_t *loop,
     uint64_t deadline_ms,
     maelys_sys_token_t token,
     maelys_sys_timer_t *out_timer);
-maelys_sys_result_t maelys_sys_loop_timer_cancel(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_timer_cancel(
     maelys_sys_loop_t *loop,
     maelys_sys_timer_t timer);
 
@@ -96,16 +97,16 @@ maelys_sys_result_t maelys_sys_loop_timer_cancel(
  * later step. A wake that does not fit is left pending rather than consumed,
  * so it is never lost.
  */
-maelys_sys_result_t maelys_sys_loop_step(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_step(
     maelys_sys_loop_t *loop,
     uint64_t deadline_ms,
     maelys_sys_event_t *events,
     size_t event_capacity,
     size_t *out_event_count,
     maelys_sys_step_result_t *out_step_result);
-maelys_sys_result_t maelys_sys_loop_wake(maelys_sys_loop_t *loop);
-maelys_sys_result_t maelys_sys_loop_stop(maelys_sys_loop_t *loop);
-maelys_sys_result_t maelys_sys_loop_destroy(maelys_sys_loop_t **loop);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_wake(maelys_sys_loop_t *loop);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_stop(maelys_sys_loop_t *loop);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_destroy(maelys_sys_loop_t **loop);
 
 #ifdef __cplusplus
 }

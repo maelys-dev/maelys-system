@@ -22,7 +22,7 @@ typedef enum maelys_sys_connect_state {
  * protected against SIGPIPE before it is returned. No DNS, address selection
  * or retry policy is performed. The handle is owner-thread-confined.
  */
-maelys_sys_result_t maelys_sys_socket_create(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_create(
     int domain,
     int type,
     int protocol,
@@ -45,12 +45,12 @@ int maelys_sys_socket_native_fd(const maelys_sys_socket_t *socket_handle);
  * yet, is ERR_STATE and may be retried after readiness. No address retry is
  * attempted.
  */
-maelys_sys_result_t maelys_sys_socket_connect_start(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_start(
     maelys_sys_socket_t *socket_handle,
     const struct sockaddr *address,
     socklen_t address_length,
     maelys_sys_connect_state_t *out_state);
-maelys_sys_result_t maelys_sys_socket_connect_complete(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_complete(
     maelys_sys_socket_t *socket_handle);
 
 /*
@@ -59,12 +59,12 @@ maelys_sys_result_t maelys_sys_socket_connect_complete(
  * EWOULDBLOCK. Receive EOF and connection-loss conditions are ERR_CLOSED.
  * Send never raises SIGPIPE.
  */
-maelys_sys_result_t maelys_sys_socket_receive(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_receive(
     maelys_sys_socket_t *socket_handle,
     void *buffer,
     size_t capacity,
     size_t *out_received);
-maelys_sys_result_t maelys_sys_socket_send(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send(
     maelys_sys_socket_t *socket_handle,
     const void *bytes,
     size_t length,
@@ -76,7 +76,7 @@ maelys_sys_result_t maelys_sys_socket_send(
  * makes a later connect_start invalid. This does not close or release the
  * handle.
  */
-maelys_sys_result_t maelys_sys_socket_shutdown(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_shutdown(
     maelys_sys_socket_t *socket_handle,
     int how);
 
@@ -100,19 +100,19 @@ typedef struct maelys_sys_socket_bind_options {
  * socket_create. No listener policy or connection limit is implied.
  * socket_bind is socket_bind_with and NULL options.
  */
-maelys_sys_result_t maelys_sys_socket_bind_with(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_bind_with(
     maelys_sys_socket_t *socket_handle,
     const struct sockaddr *address,
     socklen_t address_length,
     const maelys_sys_socket_bind_options_t *options);
-maelys_sys_result_t maelys_sys_socket_bind(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_bind(
     maelys_sys_socket_t *socket_handle,
     const struct sockaddr *address,
     socklen_t address_length);
-maelys_sys_result_t maelys_sys_socket_listen(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_listen(
     maelys_sys_socket_t *socket_handle,
     int backlog);
-maelys_sys_result_t maelys_sys_socket_accept(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_accept(
     maelys_sys_socket_t *listener,
     struct sockaddr *address,
     socklen_t *address_length,
@@ -122,7 +122,7 @@ maelys_sys_result_t maelys_sys_socket_accept(
  * Closes exactly once, releases ownership and sets *socket_handle to NULL
  * before close(2). NULL and an already-NULL handle are idempotent successes.
  */
-maelys_sys_result_t maelys_sys_socket_release(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_release(
     maelys_sys_socket_t **socket_handle);
 
 /*
@@ -135,7 +135,7 @@ maelys_sys_result_t maelys_sys_socket_release(
  * A handle whose connection failed may be detached. NULL and an already-NULL
  * handle are ERR_ARGUMENT: there is no descriptor to give.
  */
-maelys_sys_result_t maelys_sys_socket_detach(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_detach(
     maelys_sys_socket_t **socket_handle,
     int *out_fd);
 

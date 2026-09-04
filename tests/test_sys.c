@@ -21,8 +21,14 @@
     } \
 } while (0)
 
+#ifndef MAELYS_SYS_EXPECTED_VERSION
+#error "build the tests through the Makefile: it passes the VERSION file"
+#endif
+
 static int test_version_and_results(void) {
-    ASSERT_TRUE(strcmp(maelys_sys_version_string(), "0.5.6") == 0);
+    /* The VERSION file, the header macro and the function agree. */
+    ASSERT_TRUE(strcmp(MAELYS_SYS_VERSION, MAELYS_SYS_EXPECTED_VERSION) == 0);
+    ASSERT_TRUE(strcmp(maelys_sys_version_string(), MAELYS_SYS_VERSION) == 0);
     ASSERT_TRUE(maelys_sys_abi_version() == 1u);
     ASSERT_TRUE(strcmp(maelys_sys_result_string(MAELYS_SYS_OK), "ok") == 0);
     return 0;

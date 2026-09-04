@@ -63,6 +63,13 @@ the optional umbrella header `maelys/sys.h`.
   `close(2)` and never retries after `EINTR`.
 - `maelys_sys_socket_create` and `maelys_sys_socket_accept` return opaque owned
   handles which are already non-blocking, close-on-exec and SIGPIPE-safe.
+- Close-on-exec is atomic with creation on Linux; macOS applies it right
+  after creation, so a fork+exec racing in another thread can inherit the
+  descriptor. Process launchers close descriptors after fork.
+- With `MAELYS_SYS_STRICT_RESULTS` defined, functions returning
+  `maelys_sys_result_t` are marked `warn_unused_result`; cast to `(void)`
+  where ignoring the result is intended. Clang honors the cast, GCC warns
+  through it, so the option suits Clang builds.
 - Socket connect, bind, listen, accept and I/O functions make one mechanical
   POSIX decision. DNS, retry order, TLS and protocol policy remain consumers.
 - `maelys_sys_socket_detach(&handle, &fd)` hands the descriptor to the caller
