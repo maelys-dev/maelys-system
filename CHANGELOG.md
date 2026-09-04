@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-09-04
 
 - Add `maelys/sys/file.h`, the file primitives seven Maelys repositories
   had each written for themselves: trusted-file expectations and identity
