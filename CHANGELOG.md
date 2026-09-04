@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 - 2026-09-04
+
+- Add `maelys_sys_file_unlink_same` and `maelys_sys_directory_rmdir_same`:
+  remove a path only if it still names the identity given (a lease, a
+  staged name, a socket path the caller retires), `ERR_IDENTITY` otherwise.
+  The contract names the window no POSIX host can close: the check and the
+  removal are two calls, and a rename between them is not detected. The
+  white-box test proves that sentence true. `write_exclusive` removes its
+  own failed file through `unlink_same`. ABI 1 preserved.
+
 ## 0.7.0 - 2026-09-04
 
 - Add `maelys/sys/file.h`, the file primitives seven Maelys repositories

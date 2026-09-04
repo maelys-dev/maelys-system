@@ -385,6 +385,48 @@ static int test_lock(void) {
     return 0;
 }
 
+static int test_remove_same(void) {
+    char path[512], other[512], dir[512];
+    maelys_sys_file_identity_t identity, replacement;
+    struct stat status;
+    CHECK(write_plain("retire", "x", 0600) == 0);
+    CHECK(path_in_work("retire", path, sizeof(path)));
+    CHECK(maelys_sys_file_path_identity(path, &identity) == MAELYS_SYS_OK);
+    /* Another object took the path: nothing is removed. */
+    CHECK(write_plain("newcomer", "y", 0600) == 0);
+    CHECK(path_in_work("newcomer", other, sizeof(other)));
+    CHECK(maelys_sys_file_path_identity(other, &replacement) == MAELYS_SYS_OK);
+    CHECK(rename(other, path) == 0);
+    CHECK(maelys_sys_file_unlink_same(path, &identity) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(lstat(path, &status) == 0);
+    /* The object it names is removed. */
+    CHECK(maelys_sys_file_unlink_same(path, &replacement) == MAELYS_SYS_OK);
+    CHECK(lstat(path, &status) != 0 && errno == ENOENT);
+    CHECK(maelys_sys_file_unlink_same(path, &replacement) == MAELYS_SYS_ERR_NOT_FOUND);
+    /* A directory is not a file, and the reverse. */
+    CHECK(path_in_work("retire-dir", dir, sizeof(dir)));
+    CHECK(mkdir(dir, 0700) == 0);
+    CHECK(maelys_sys_file_path_identity(dir, &identity) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_unlink_same(dir, &identity) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(write_plain("retire", "x", 0600) == 0);
+    CHECK(maelys_sys_file_path_identity(path, &replacement) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_directory_rmdir_same(path, &replacement) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(unlink(path) == 0);
+    /* A directory that is not empty stays; an empty one goes. */
+    CHECK(path_in_work("retire-dir/inside", other, sizeof(other)));
+    CHECK(mkdir(other, 0700) == 0);
+    errno = 0;
+    CHECK(maelys_sys_directory_rmdir_same(dir, &identity) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == ENOTEMPTY);
+    CHECK(rmdir(other) == 0);
+    CHECK(maelys_sys_directory_rmdir_same(dir, &identity) == MAELYS_SYS_OK);
+    CHECK(lstat(dir, &status) != 0 && errno == ENOENT);
+    CHECK(maelys_sys_directory_rmdir_same(dir, &identity) == MAELYS_SYS_ERR_NOT_FOUND);
+    CHECK(maelys_sys_file_unlink_same(NULL, &identity) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_file_unlink_same(path, NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    return 0;
+}
+
 static int remove_work(void) {
     char path[512];
     static const char *names[] = {"plain", "bounded", "written", "empty"};
@@ -400,7 +442,8 @@ int main(void) {
     int written = snprintf(work, sizeof(work), "%s/maelys-sys-file.XXXXXX", base);
     if (written <= 0 || (size_t)written >= sizeof(work) || !mkdtemp(work)) return 1;
     int failed = test_verify_and_open() || test_read_bounded() ||
-        test_write_exclusive_and_sync() || test_publish() || test_lock();
+        test_write_exclusive_and_sync() || test_publish() || test_lock() ||
+        test_remove_same();
     if (remove_work() != 0 && !failed) {
         fprintf(stderr, "work directory not empty: %s\n", work);
         return 1;
@@ -411,5 +454,6 @@ int main(void) {
     puts("ok - file exclusive write and sync");
     puts("ok - file and directory no-replace publication");
     puts("ok - file lock");
+    puts("ok - file and directory conditional removal");
     return 0;
 }

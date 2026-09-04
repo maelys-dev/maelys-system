@@ -85,5 +85,7 @@ run_mutant final-mode-before-content src/file.c \
         write_all(fd, bytes, length) != 0) {'
 run_mutant exclusive-file-created-readable src/file.c \
     'O_CLOEXEC | O_NOFOLLOW, 0600);' 'O_CLOEXEC | O_NOFOLLOW, 0644);'
+run_mutant removal-ignores-identity src/file.c \
+    'now.st_dev != identity->device || now.st_ino != identity->inode ||' '0 ||'
 
-printf '%s\n' "mutation check: 18/18 killed"
+printf '%s\n' "mutation check: 19/19 killed"

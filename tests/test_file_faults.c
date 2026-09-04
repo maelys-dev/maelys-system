@@ -299,13 +299,54 @@ static int read_and_open_failures(void) {
     return 0;
 }
 
+static char retire_path[512];
+static char retire_newcomer[512];
+
+static int swap_before_unlink(void) {
+    /* Between the identity check and the removal. */
+    return rename(retire_newcomer, retire_path) == 0 ? 0 : -1;
+}
+
+/*
+ * The contract says the check and the removal are two calls and a rename
+ * between them is not detected: this proves it says the truth, so that a
+ * consumer never reads more into it.
+ */
+static int remove_same_window(void) {
+    maelys_sys_file_identity_t identity;
+    struct stat status;
+    CHECK(join("retire", retire_path, sizeof(retire_path)));
+    CHECK(join("retire-newcomer", retire_newcomer, sizeof(retire_newcomer)));
+    CHECK(maelys_sys_file_write_exclusive(retire_path, "", 0u, 0600) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_write_exclusive(retire_newcomer, "n", 1u, 0600) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_path_identity(retire_path, &identity) == MAELYS_SYS_OK);
+    arm("unlink", 0, 0);
+    fault_action = swap_before_unlink;
+    CHECK(maelys_sys_file_unlink_same(retire_path, &identity) == MAELYS_SYS_OK);
+    /* The newcomer is what went; the contract said so. */
+    CHECK(absent(retire_path) && absent(retire_newcomer));
+    /* Each call failing is an OS error with its errno. */
+    CHECK(maelys_sys_file_write_exclusive(retire_path, "", 0u, 0600) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_path_identity(retire_path, &identity) == MAELYS_SYS_OK);
+    arm("lstat", EACCES, 0);
+    errno = 0;
+    CHECK(maelys_sys_file_unlink_same(retire_path, &identity) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EACCES);
+    arm("unlink", EPERM, 0);
+    errno = 0;
+    CHECK(maelys_sys_file_unlink_same(retire_path, &identity) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EPERM && lstat(retire_path, &status) == 0);
+    CHECK(maelys_sys_file_unlink_same(retire_path, &identity) == MAELYS_SYS_OK);
+    return 0;
+}
+
 int main(void) {
     const char *base = getenv("TMPDIR");
     if (!base || base[0] != '/') base = "/tmp";
     int written = snprintf(work, sizeof(work), "%s/maelys-sys-faults.XXXXXX", base);
     if (written <= 0 || (size_t)written >= sizeof(work) || !mkdtemp(work)) return 1;
     int failed = write_exclusive_failures() || publish_failures() ||
-        lock_failures() || read_and_open_failures();
+        lock_failures() || read_and_open_failures() || remove_same_window();
     if (!failed && rmdir(work) != 0) {
         fprintf(stderr, "work directory not empty: %s\n", work);
         return 1;
@@ -315,5 +356,6 @@ int main(void) {
     puts("ok - publication moves nothing on failure");
     puts("ok - lock holds nothing after a failed identity check");
     puts("ok - open, read and sync report their failing call");
+    puts("ok - conditional removal names its window");
     return 0;
 }
