@@ -8,6 +8,14 @@ permissions:
   contents: read
 
 jobs:
+  # The socle's own CI of a product: make check on the three release
+  # targets, sanitizers with clang, and the drift check of the managed
+  # files from the socle release.yml pins. adopt keeps the socle line current.
+  check:
+    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@1ea525ad1c84f44d93cc767ef39660f5b2715bd1 # v0.6.1
+    with:
+      product: maelys-system
+
   linux:
     strategy:
       fail-fast: false
@@ -34,15 +42,6 @@ jobs:
         run: uname -m
       - name: Install smoke test
         run: make install-check CC=${{ matrix.cc }}
-      - name: Release socle drift
-        if: matrix.runner == 'ubuntu-24.04' && matrix.cc == 'clang'
-        run: |
-          set -euo pipefail
-          sha="$(sed -n 's|.*maelys-release/.github/workflows/release.yml@\([0-9a-f]\{40\}\).*|\1|p' .github/workflows/release.yml)"
-          test -n "$sha"
-          git clone -q https://github.com/maelys-dev/maelys-release.git "$RUNNER_TEMP/maelys-release"
-          git -C "$RUNNER_TEMP/maelys-release" checkout -q "$sha"
-          "$RUNNER_TEMP/maelys-release/bin/maelys-release" check . --product maelys-system
 
   macos:
     strategy:

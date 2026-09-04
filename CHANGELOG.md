@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Adopt maelys-release 0.6.1: the managed files are regenerated, and
+  `.github/workflows/ci.yml` calls the socle's `check-product.yml`, which
+  reads `adapter/` itself and checks the drift of the managed files from
+  the socle `release.yml` pins; the hand-written drift step is gone. The
+  product's own matrix (gcc and clang, two macOS, mutants, benchmark,
+  packages) stays next to it.
+
 ## 0.8.0 - 2026-09-04
 
 - Add `maelys_sys_file_unlink_same` and `maelys_sys_directory_rmdir_same`:

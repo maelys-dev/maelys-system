@@ -1,5 +1,5 @@
 <!-- maelys-release:begin -->
-# Maelys release socle (maelys-release v0.5.0)
+# Maelys release socle (maelys-release v0.6.1)
 
 This repository publishes through the shared maelys-release workflows. The
 rules below hold for every release-related change; the complete conventions
@@ -18,9 +18,10 @@ are in `docs/conventions.md` of maelys-release.
   line 1, commit on line 2), cloned by `scripts/checkout-dependency.sh NAME`.
   The packages the build needs on the runners are listed in
   `adapter/PACKAGES` under `[linux]` and `[macos]`; no script installs them.
-  `.github/workflows/ci.yml` calls the socle's `check-product.yml` with the
-  same declarations; `maelys-release rehearse DIR TARGET` replays the Linux
-  build job in Docker before a first tag.
+  `.github/workflows/ci.yml` calls the socle's `check-product.yml`, which
+  reads these declarations itself; `adopt` keeps that line's socle version
+  current and `check` warns when no job calls it. `maelys-release rehearse
+  DIR TARGET` replays the Linux build job in Docker before a first tag.
 - A release is a signed, annotated tag `vX.Y.Z` on `main` whose commit
   carries `VERSION` = `X.Y.Z` and a dated `CHANGELOG.md` entry. Never push a
   tag before `make check` passes on that exact commit, never move or force a
