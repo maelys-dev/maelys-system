@@ -1,7 +1,7 @@
 /*
  * White-box fault injection for the file primitives: src/file.c is compiled
- * into this unit with a fault point before every system call, so each
- * failure path is executed and its promise checked: nothing half-written
+ * into this unit with a fault point before each system call the contracts
+ * speak about, so each failure path is executed and its promise checked: nothing half-written
  * is left behind, nothing moved when a publication fails, no lock held
  * when the identity check after the lock fails.
  */
@@ -26,17 +26,21 @@ static int fault_errno;
 static int fault_skip;
 static int (*fault_action)(void);
 
+static int fault_next_errno;
+
 static int file_fault(const char *step) {
     if (!fault_step || strcmp(step, fault_step) != 0) return 0;
     if (fault_skip > 0) { --fault_skip; return 0; }
+    int error = fault_errno;
     fault_step = fault_next;
     fault_next = NULL;
+    if (fault_step) fault_errno = fault_next_errno;
     if (fault_action) {
         int (*action)(void) = fault_action;
         fault_action = NULL;
         return action();
     }
-    errno = fault_errno;
+    errno = error;
     return 1;
 }
 
@@ -52,8 +56,11 @@ static void arm(const char *step, int error, int skip) {
  * fsync(2) is its fallback, so both must fail for the call to fail. */
 static void arm_sync(int error) {
 #if defined(__APPLE__)
-    arm("fullfsync", error, 0);
+    /* A refused F_FULLFSYNC falls back to fsync(2); the error of the test
+     * is then fsync's. */
+    arm("fullfsync", ENOTSUP, 0);
     fault_next = "fsync";
+    fault_next_errno = error;
 #else
     arm("fsync", error, 0);
 #endif
@@ -73,6 +80,16 @@ static int join(const char *name, char *out, size_t capacity) {
 static int absent(const char *path) {
     struct stat status;
     return lstat(path, &status) != 0 && errno == ENOENT;
+}
+
+static mode_t mode_while_writing;
+
+static int check_mode_while_writing(void) {
+    char path[512];
+    struct stat status;
+    if (!join("exclusive", path, sizeof(path)) || lstat(path, &status) != 0) return -1;
+    mode_while_writing = status.st_mode & 0777;
+    return 0;
 }
 
 static int write_exclusive_failures(void) {
@@ -98,7 +115,25 @@ static int write_exclusive_failures(void) {
     arm("fullfsync", ENOTSUP, 0);
     CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_OK);
     CHECK(unlink(path) == 0);
+    /* F_FULLFSYNC failing with an I/O error is a lost write, not a refusal. */
+    arm("fullfsync", EIO, 0);
+    errno = 0;
+    CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EIO && absent(path));
 #endif
+    /* While the content is written the file is 0600, whatever the final
+     * mode and the umask; it receives the final mode only afterwards. */
+    {
+        mode_t previous = umask(077);
+        arm("write", 0, 0);
+        fault_action = check_mode_while_writing;
+        CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_OK);
+        (void)umask(previous);
+        CHECK(mode_while_writing == 0600);
+        struct stat final_status;
+        CHECK(lstat(path, &final_status) == 0 && (final_status.st_mode & 0777) == 0644);
+        CHECK(unlink(path) == 0);
+    }
     /* The removal on failure targets the created file only: when the path
      * was swapped meanwhile, the newcomer is left alone. */
     static char swapped_in[512];
@@ -163,9 +198,16 @@ static int publish_failures(void) {
     return 0;
 }
 
+static char keepalive_path[512];
+
 static int replace_lock_file(void) {
     /* Between open and flock: another file takes the lock path. */
     return rename(replacement_path, lock_path) == 0 ? 0 : -1;
+}
+
+static int loosen_lock_file(void) {
+    /* Between open and flock: the file becomes readable by others. */
+    return chmod(lock_path, 0644);
 }
 
 static int lock_failures(void) {
@@ -174,13 +216,27 @@ static int lock_failures(void) {
     CHECK(join("lock", lock_path, sizeof(lock_path)));
     CHECK(join("lock-replacement", replacement_path, sizeof(replacement_path)));
 
-    /* Replaced between open and flock: the identity check after the lock
-     * sees the path name another inode; nothing is held. */
+    /* Replaced between open and flock while the old inode stays alive
+     * through another name: only the path check sees it. */
+    CHECK(maelys_sys_file_write_exclusive(lock_path, "", 0u, 0600) == MAELYS_SYS_OK);
     CHECK(maelys_sys_file_write_exclusive(replacement_path, "", 0u, 0600) == MAELYS_SYS_OK);
+    CHECK(join("lock-keepalive", keepalive_path, sizeof(keepalive_path)));
+    CHECK(link(lock_path, keepalive_path) == 0);
     arm("flock", 0, 0);
     fault_action = replace_lock_file;
+    maelys_sys_file_expectations_t any_links = {0};
+    maelys_sys_file_lock_options_t loose = {
+        .exclusive = 1, .wait = 1, .create = 1, .writable = 0, .expectations = &any_links
+    };
+    CHECK(maelys_sys_file_lock_acquire(lock_path, &loose, &lock) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(lock == NULL);
+    CHECK(unlink(keepalive_path) == 0);
+    /* Changed between open and flock: only the second verification sees it. */
+    arm("flock", 0, 0);
+    fault_action = loosen_lock_file;
     CHECK(maelys_sys_file_lock_acquire(lock_path, NULL, &lock) == MAELYS_SYS_ERR_IDENTITY);
     CHECK(lock == NULL);
+    CHECK(chmod(lock_path, 0600) == 0);
     /* The replacement is lockable by a fresh caller: nothing lingers. */
     maelys_sys_file_lock_options_t nowait = {.exclusive = 1, .wait = 0, .create = 0};
     CHECK(maelys_sys_file_lock_acquire(lock_path, &nowait, &lock) == MAELYS_SYS_OK);
@@ -196,9 +252,13 @@ static int lock_failures(void) {
     arm("flock", ENOLCK, 0);
     CHECK(maelys_sys_file_lock_acquire(lock_path, NULL, &lock) == MAELYS_SYS_ERR_OS);
     arm("fstat", EIO, 1);   /* the verification after the lock */
+    errno = 0;
     CHECK(maelys_sys_file_lock_acquire(lock_path, NULL, &lock) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EIO);
     arm("lstat", EACCES, 0);
+    errno = 0;
     CHECK(maelys_sys_file_lock_acquire(lock_path, NULL, &lock) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EACCES);
     arm("lstat", ENOENT, 0); /* the path vanished: not the caller's file */
     CHECK(maelys_sys_file_lock_acquire(lock_path, NULL, &lock) == MAELYS_SYS_ERR_IDENTITY);
     CHECK(lock == NULL);

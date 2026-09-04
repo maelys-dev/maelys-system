@@ -15,7 +15,8 @@
   preserved.
 - Tests: `tests/test_file.c` through the public API and
   `tests/test_file_faults.c`, which compiles `src/file.c` with a fault
-  point before every system call and checks each failure path's promise.
+  point before each system call the contracts speak about and checks
+  every failure path's promise.
 
 ## 0.6.0 - 2026-09-04
 

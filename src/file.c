@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,7 +218,7 @@ maelys_sys_result_t maelys_sys_file_read_bounded(
     /* The buffer is full: only end of file proves the bound was met. */
     for (;;) {
         unsigned char probe;
-        ssize_t got = read(fd, &probe, 1u);
+        ssize_t got = FAULT("read") ? -1 : read(fd, &probe, 1u);
         if (got < 0 && errno == EINTR) continue;
         if (got < 0) return MAELYS_SYS_ERR_OS;
         if (got > 0) return MAELYS_SYS_ERR_CAPACITY;
@@ -229,6 +230,12 @@ maelys_sys_result_t maelys_sys_file_read_bounded(
 static maelys_sys_result_t sync_descriptor(int fd) {
 #if defined(__APPLE__) && defined(F_FULLFSYNC)
     if (!FAULT("fullfsync") && fcntl(fd, F_FULLFSYNC) == 0) return MAELYS_SYS_OK;
+    /* Only a refusal falls back to fsync(2): an I/O error is a lost write,
+     * not a volume without the feature. */
+    if (errno != ENOTSUP && errno != EOPNOTSUPP && errno != ENODEV &&
+        errno != EINVAL) {
+        return MAELYS_SYS_ERR_OS;
+    }
 #endif
     if (FAULT("fsync") || fsync(fd) != 0) return MAELYS_SYS_ERR_OS;
     return MAELYS_SYS_OK;
@@ -290,9 +297,15 @@ maelys_sys_result_t maelys_sys_file_write_exclusive(
     struct stat created;
     maelys_sys_result_t result = MAELYS_SYS_OK;
     if (FAULT("fstat") || fstat(fd, &created) != 0) {
+        /* No identity to compare with: remove only what a fresh creation
+         * looks like, an empty regular file of ours with a single link. */
         int saved = errno;
+        struct stat now;
         (void)maelys_sys_fd_close(&fd);
-        (void)unlink(path);
+        if (lstat(path, &now) == 0 && S_ISREG(now.st_mode) && now.st_size == 0 &&
+            now.st_nlink == 1 && now.st_uid == geteuid()) {
+            (void)unlink(path);
+        }
         errno = saved;
         return MAELYS_SYS_ERR_OS;
     }
@@ -333,18 +346,41 @@ static int rename_noreplace(const char *staging, const char *destination) {
 #endif
 }
 
+/*
+ * The parent directory of a published name, followed through a final
+ * symbolic link: a directory is not a trusted object here, and /tmp on
+ * macOS is a link. Trailing separators do not count as a component.
+ */
 static maelys_sys_result_t sync_parent_of(const char *destination) {
-    const char *slash = strrchr(destination, '/');
-    if (!slash) return maelys_sys_directory_sync(".");
-    if (slash == destination) return maelys_sys_directory_sync("/");
-    size_t length = (size_t)(slash - destination);
-    char *parent = malloc(length + 1u);
-    if (!parent) return MAELYS_SYS_ERR_MEMORY;
-    memcpy(parent, destination, length);
+    char parent[PATH_MAX];
+    size_t end = strlen(destination);
+    while (end > 1u && destination[end - 1u] == '/') --end;
+    size_t slash = end;
+    while (slash > 0u && destination[slash - 1u] != '/') --slash;
+    size_t length;
+    if (slash == 0u) {
+        length = 1u;
+        parent[0] = '.';
+    } else if (slash == 1u) {
+        length = 1u;
+        parent[0] = '/';
+    } else {
+        length = slash - 1u;
+        if (length >= sizeof(parent)) {
+            errno = ENAMETOOLONG;
+            return MAELYS_SYS_ERR_OS;
+        }
+        memcpy(parent, destination, length);
+    }
     parent[length] = '\0';
-    maelys_sys_result_t result = maelys_sys_directory_sync(parent);
+    if (FAULT("open")) return MAELYS_SYS_ERR_OS;
+    int fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return MAELYS_SYS_ERR_OS;
+    maelys_sys_result_t result = sync_descriptor(fd);
     int saved = errno;
-    free(parent);
+    if (maelys_sys_fd_close(&fd) != MAELYS_SYS_OK && result == MAELYS_SYS_OK) {
+        return MAELYS_SYS_ERR_OS;
+    }
     errno = saved;
     return result;
 }
@@ -363,6 +399,7 @@ static maelys_sys_result_t publish(
         return MAELYS_SYS_ERR_IDENTITY;
     }
     struct stat target;
+    if (FAULT("lstat")) return MAELYS_SYS_ERR_OS;
     if (lstat(destination, &target) == 0) {
         /* The rename decides; this only settles the same-file case, which
          * the two hosts answer differently. */
@@ -465,7 +502,11 @@ maelys_sys_result_t maelys_sys_file_lock_acquire(
     *out_lock = lock;
     return MAELYS_SYS_OK;
 unlock:
-    (void)flock(fd, LOCK_UN);
+    {
+        int saved = errno;
+        (void)flock(fd, LOCK_UN);
+        errno = saved;
+    }
 fail:
     {
         int saved = errno;

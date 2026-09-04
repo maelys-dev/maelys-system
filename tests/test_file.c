@@ -11,7 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #define CHECK(condition) do { \
@@ -117,6 +119,28 @@ static int test_verify_and_open(void) {
         MAELYS_SYS_ERR_IDENTITY);
     CHECK(mismatch == MAELYS_SYS_FILE_MISMATCH_TYPE);
     CHECK(unlink(other) == 0);
+
+    /* A Unix socket at the path: the kernel refuses to open it as a file,
+     * with a different errno on each host and the same result here. */
+    {
+        struct sockaddr_un address;
+        memset(&address, 0, sizeof(address));
+        address.sun_family = AF_UNIX;
+        CHECK(path_in_work("sock", other, sizeof(other)));
+        CHECK(strlen(other) < sizeof(address.sun_path));
+        memcpy(address.sun_path, other, strlen(other) + 1u);
+        int listener = socket(AF_UNIX, SOCK_STREAM, 0);
+        CHECK(listener >= 0);
+        CHECK(bind(listener, (struct sockaddr *)&address, (socklen_t)sizeof(address)) == 0);
+        CHECK(maelys_sys_file_open_trusted(other, &expect, NULL, &mismatch, &fd) ==
+            MAELYS_SYS_ERR_IDENTITY);
+        CHECK(mismatch == MAELYS_SYS_FILE_MISMATCH_TYPE && fd == -1);
+        maelys_sys_file_lock_t *lock = NULL;
+        CHECK(maelys_sys_file_lock_acquire(other, NULL, &lock) == MAELYS_SYS_ERR_IDENTITY);
+        CHECK(lock == NULL);
+        CHECK(maelys_sys_fd_close(&listener) == MAELYS_SYS_OK);
+        CHECK(unlink(other) == 0);
+    }
 
     CHECK(path_in_work("missing", other, sizeof(other)));
     CHECK(maelys_sys_file_open_trusted(other, &expect, NULL, &mismatch, &fd) ==
@@ -234,10 +258,31 @@ static int test_publish(void) {
     CHECK(maelys_sys_file_publish_noreplace(NULL, staging, NULL) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(unlink(staging) == 0 && unlink(destination) == 0);
 
+    /* The parent sync follows a directory reached through a symbolic
+     * link, as /tmp is on macOS. */
+    {
+        char linked[512], through[512];
+        CHECK(path_in_work("realdir", linked, sizeof(linked)));
+        CHECK(mkdir(linked, 0700) == 0);
+        CHECK(path_in_work("linkdir", through, sizeof(through)));
+        CHECK(symlink(linked, through) == 0);
+        CHECK(write_plain("stage", "p", 0600) == 0);
+        CHECK(path_in_work("linkdir/final", other, sizeof(other)));
+        CHECK(maelys_sys_file_publish_noreplace(staging, other, &options) == MAELYS_SYS_OK);
+        CHECK(lstat(other, &status) == 0 && status.st_size == 1);
+        CHECK(unlink(other) == 0 && unlink(through) == 0 && rmdir(linked) == 0);
+    }
+
     /* Directories. */
     CHECK(mkdir(staging, 0700) == 0);
-    CHECK(maelys_sys_directory_publish_noreplace(staging, destination, &options) ==
-        MAELYS_SYS_OK);
+    /* A trailing separator on the destination does not name a component. */
+    {
+        char slashed[512];
+        int written = snprintf(slashed, sizeof(slashed), "%s/", destination);
+        CHECK(written > 0 && (size_t)written < sizeof(slashed));
+        CHECK(maelys_sys_directory_publish_noreplace(staging, slashed, &options) ==
+            MAELYS_SYS_OK);
+    }
     CHECK(lstat(destination, &status) == 0 && S_ISDIR(status.st_mode));
     CHECK(mkdir(staging, 0700) == 0);
     CHECK(maelys_sys_directory_publish_noreplace(staging, destination, NULL) ==
@@ -291,10 +336,18 @@ static int test_lock(void) {
 
     /* The lock file is never removed by release. */
     CHECK(lstat(path, &status) == 0);
-    /* Default expectations refuse a file others can read. */
+    /* Default expectations refuse a file the group or others can read,
+     * and a file with a second name. */
     CHECK(chmod(path, 0644) == 0);
     CHECK(maelys_sys_file_lock_acquire(path, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
     CHECK(first == NULL);
+    CHECK(chmod(path, 0640) == 0);
+    CHECK(maelys_sys_file_lock_acquire(path, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(chmod(path, 0600) == 0);
+    CHECK(path_in_work("lock-alias", other, sizeof(other)));
+    CHECK(link(path, other) == 0);
+    CHECK(maelys_sys_file_lock_acquire(path, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
+    CHECK(unlink(other) == 0);
     CHECK(chmod(path, 0400) == 0);
     /* Read-only by default: a 0400 file locks; writable refuses it. */
     CHECK(maelys_sys_file_lock_acquire(path, &options, &first) == MAELYS_SYS_OK);
@@ -321,8 +374,11 @@ static int test_lock(void) {
     CHECK(maelys_sys_file_lock_acquire(other, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
     CHECK(lstat(other, &status) == 0 && S_ISLNK(status.st_mode));
     CHECK(unlink(other) == 0);
-    /* A directory at the path. */
+    /* A directory at the path, opened read-only or read-write. */
     CHECK(maelys_sys_file_lock_acquire(work, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
+    options.writable = 1;
+    CHECK(maelys_sys_file_lock_acquire(work, &options, &first) == MAELYS_SYS_ERR_IDENTITY);
+    options.writable = 0;
     CHECK(maelys_sys_file_lock_acquire(NULL, &options, &first) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_file_lock_acquire(path, &options, NULL) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(unlink(path) == 0);

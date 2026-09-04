@@ -183,8 +183,10 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
 
 typedef struct maelys_sys_publish_options {
     /* Also make the destination's parent directory durable on success. The
-     * parent is the destination path up to its last separator, resolved
-     * again after the rename. */
+     * parent is the destination path up to its last separator (trailing
+     * separators do not count), resolved again after the rename and
+     * followed through a final symbolic link: a directory is not a trusted
+     * object here, and /tmp on macOS is a link. */
     int sync_parent;
 } maelys_sys_publish_options_t;
 
@@ -258,8 +260,10 @@ typedef struct maelys_sys_file_lock_options {
 /*
  * Opens path close-on-exec, without following a final symbolic link, with
  * O_NONBLOCK during open(2) then cleared; verifies the descriptor; takes
- * the lock, retrying on EINTR when waiting; then verifies again and
- * confirms that path still names the locked file (same device and inode).
+ * the lock, retrying on EINTR when waiting; then applies the expectations
+ * again to the locked descriptor and confirms that path still names the
+ * locked file (same device and inode). The second pass re-applies the
+ * expectations, not the identity: a size bound is checked twice.
  * Any mismatch, and what open(2) refuses as not a plain file, releases
  * everything and reports ERR_IDENTITY: a file replaced between open and
  * lock is not a file the caller holds. options may be NULL: exclusive,
