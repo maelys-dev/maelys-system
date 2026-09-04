@@ -21,6 +21,9 @@ const char *maelys_sys_result_string(maelys_sys_result_t result) {
         case MAELYS_SYS_ERR_NOT_FOUND: return "not found";
         case MAELYS_SYS_ERR_CAPACITY: return "capacity exceeded";
         case MAELYS_SYS_ERR_UNSUPPORTED: return "unsupported";
+        case MAELYS_SYS_ERR_EXISTS: return "already exists";
+        case MAELYS_SYS_ERR_BUSY: return "busy";
+        case MAELYS_SYS_ERR_IDENTITY: return "unexpected file identity";
     }
     return "unknown result";
 }

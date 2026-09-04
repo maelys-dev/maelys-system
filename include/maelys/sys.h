@@ -5,6 +5,7 @@
 #include "maelys/sys/result.h"
 #include "maelys/sys/clock.h"
 #include "maelys/sys/fd.h"
+#include "maelys/sys/file.h"
 #include "maelys/sys/socket.h"
 #include "maelys/sys/wakeup.h"
 #include "maelys/sys/thread.h"
