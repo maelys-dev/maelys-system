@@ -122,9 +122,10 @@ static int write_exclusive_failures(void) {
     CHECK(errno == EIO && absent(path));
 #endif
     /* While the content is written the file is 0600, whatever the final
-     * mode and the umask; it receives the final mode only afterwards. */
+     * mode; it receives the final mode only afterwards. Under a permissive
+     * umask, so that a file created 0644 would show as such. */
     {
-        mode_t previous = umask(077);
+        mode_t previous = umask(022);
         arm("write", 0, 0);
         fault_action = check_mode_while_writing;
         CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_OK);

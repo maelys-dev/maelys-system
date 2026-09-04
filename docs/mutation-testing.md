@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies ten one-line faults and requires the existing tests to
-reject every mutant:
+directories, applies eighteen one-line faults and requires the existing
+tests to reject every mutant. Ten target the reactor:
 
 - generation increment removed;
 - stale watch generation accepted;
@@ -18,6 +18,22 @@ reject every mutant:
 The last two are visible only to `tests/test_internals.c`, which compiles
 `src/loop.c` into the test to check the heap invariant and the dead-node
 count after every operation, against a reference model.
+
+Eight target the file primitives, each a fault a cold review of
+`src/file.c` had injected and found the tests of the time unable to see:
+
+- the path not re-resolved to the locked inode after `flock`;
+- the expectations not re-applied after `flock`;
+- a held lock reported as an OS error instead of `ERR_BUSY`;
+- an existing destination reported as an OS error instead of `ERR_EXISTS`;
+- `O_NONBLOCK` left on the descriptor after `open(2)`;
+- a bounded read that ignores bytes beyond the buffer;
+- the final mode applied before the content is written; and
+- an exclusive file created readable instead of 0600.
+
+`tests/test_file_faults.c` compiles `src/file.c` with a fault point before
+each system call the contracts speak about; the mode and lock mutants are
+caught through actions taken at those points.
 
 The sweep is deterministic and has a 30-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the
