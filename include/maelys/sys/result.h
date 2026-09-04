@@ -28,7 +28,11 @@ typedef enum maelys_sys_result {
     MAELYS_SYS_ERR_STATE,
     MAELYS_SYS_ERR_NOT_FOUND,
     MAELYS_SYS_ERR_CAPACITY,
-    MAELYS_SYS_ERR_UNSUPPORTED
+    MAELYS_SYS_ERR_UNSUPPORTED,
+    /* Added for the file primitives; appended so ABI 1 values are stable. */
+    MAELYS_SYS_ERR_EXISTS,   /* a destination or a file already exists */
+    MAELYS_SYS_ERR_BUSY,     /* a lock is held elsewhere and waiting was refused */
+    MAELYS_SYS_ERR_IDENTITY  /* the file is not what the caller expected of it */
 } maelys_sys_result_t;
 
 const char *maelys_sys_result_string(maelys_sys_result_t result);
