@@ -276,13 +276,45 @@ static int write_all(int fd, const unsigned char *bytes, size_t length) {
     return 0;
 }
 
+/* ---- conditional removal ------------------------------------------------ */
+
+static maelys_sys_result_t remove_same(
+    const char *path, const maelys_sys_file_identity_t *identity, int directory) {
+    if (!path || !identity) return MAELYS_SYS_ERR_ARGUMENT;
+    struct stat now;
+    if (FAULT("lstat") || lstat(path, &now) != 0) {
+        return errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
+    }
+    if (now.st_dev != identity->device || now.st_ino != identity->inode ||
+        (directory ? !S_ISDIR(now.st_mode) : S_ISDIR(now.st_mode))) {
+        return MAELYS_SYS_ERR_IDENTITY;
+    }
+    /* Two calls: what a rename slips in between them is removed instead. */
+    int removed = directory ? (FAULT("rmdir") ? -1 : rmdir(path))
+                            : (FAULT("unlink") ? -1 : unlink(path));
+    if (removed != 0) {
+        return errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
+    }
+    return MAELYS_SYS_OK;
+}
+
+maelys_sys_result_t maelys_sys_file_unlink_same(
+    const char *path,
+    const maelys_sys_file_identity_t *identity) {
+    return remove_same(path, identity, 0);
+}
+
+maelys_sys_result_t maelys_sys_directory_rmdir_same(
+    const char *path,
+    const maelys_sys_file_identity_t *identity) {
+    return remove_same(path, identity, 1);
+}
+
 /* Removes path only if it still names the file that was created. */
 static void remove_created(const char *path, const struct stat *created) {
-    struct stat now;
-    if (lstat(path, &now) == 0 && S_ISREG(now.st_mode) &&
-        now.st_dev == created->st_dev && now.st_ino == created->st_ino) {
-        (void)unlink(path);
-    }
+    maelys_sys_file_identity_t identity;
+    identity_from_stat(created, &identity);
+    (void)maelys_sys_file_unlink_same(path, &identity);
 }
 
 maelys_sys_result_t maelys_sys_file_write_exclusive(

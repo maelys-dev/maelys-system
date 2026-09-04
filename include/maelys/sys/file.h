@@ -107,6 +107,24 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_path_identity(
     maelys_sys_file_identity_t *out_identity);
 
 /*
+ * Removes path only if it still names the identity given: a lease, a
+ * staged file or a socket path that the caller created and now retires,
+ * never something that took its place. ERR_IDENTITY when path names
+ * another object, nothing removed; ERR_NOT_FOUND when nothing is there.
+ * The check and the removal are two calls: a rename between them is not
+ * detected, and no POSIX host offers a removal by inode. That window is
+ * the smallest that exists; the contract names it rather than hiding it.
+ * unlink_same refuses a directory, rmdir_same anything but a directory,
+ * with ERR_IDENTITY; a directory that is not empty is ERR_OS (ENOTEMPTY).
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_unlink_same(
+    const char *path,
+    const maelys_sys_file_identity_t *identity);
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_rmdir_same(
+    const char *path,
+    const maelys_sys_file_identity_t *identity);
+
+/*
  * Same file: same device and inode, nothing else. Size, mode, links and
  * owner are data about the file at snapshot time, not its identity; a lock
  * file that grew is still the locked file. NULL is never the same.
@@ -171,8 +189,8 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_sync(
  * 0600 under the umask and only receives final_mode, which fchmod(2)
  * applies as given without the umask, after its content, so a partial file
  * is never readable under the final permissions. On any failure the file
- * is removed, by unlink(2) of path only if path still names the file that
- * was created, and the failure reported. bytes may be NULL when length is
+ * is removed with unlink_same, so only the file that was created goes,
+ * and the failure reported. bytes may be NULL when length is
  * 0. Durability covers the file, not its directory entry.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
