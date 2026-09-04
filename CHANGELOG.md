@@ -23,12 +23,15 @@
   cast, GCC warns through it). The library's own Clang builds enable it.
 - Thread names are truncated to what the host applies (15 bytes on Linux);
   longer names were silently not applied.
-- macOS: `_DARWIN_C_SOURCE` exposes `pthread_cond_timedwait_relative_np`
-  instead of a local `extern` declaration.
+- macOS: `_DARWIN_C_SOURCE` keeps `pthread_cond_timedwait_relative_np`
+  declared by the SDK even if a feature macro such as `_POSIX_C_SOURCE` is
+  ever defined, instead of a local `extern` declaration.
 - Document that close-on-exec is atomic with creation on Linux only.
 - Build: header dependency tracking (`-MMD`), `-fPIC`, `make analyze` fails
   on findings, the version test reads the `VERSION` file through the
   Makefile instead of a literal, CI actions pinned by commit.
+- Tests: a timer compaction order test and a watch slot reuse check, plus
+  two reactor mutants (compacted heap not rebuilt, freed slot not reused).
 
 ## 0.5.5 - 2026-09-03
 

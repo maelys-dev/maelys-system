@@ -174,6 +174,8 @@ static maelys_sys_result_t grow_watches(maelys_sys_loop_t *loop) {
     return MAELYS_SYS_OK;
 }
 
+/* Sized by the largest watched descriptor (4 bytes each, power of two),
+ * released with the loop: 4 MiB at the Linux ceiling of 1 048 576 fds. */
 static maelys_sys_result_t reserve_fd_slot(maelys_sys_loop_t *loop, int fd) {
     size_t needed = (size_t)fd + 1u;
     if (needed <= loop->fd_slot_capacity) return MAELYS_SYS_OK;

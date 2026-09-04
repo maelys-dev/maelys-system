@@ -48,5 +48,10 @@ run_mutant timer-token-lost \
     '.token = slot->token,' '.token = 0,'
 run_mutant wake-consumed-when-full \
     'if (produced == event_capacity) {' 'if (0) {'
+run_mutant compacted-heap-not-rebuilt \
+    'heap_sift_down(loop, i);' '(void)i;'
+run_mutant freed-watch-slot-not-reused \
+    'loop->free_watch = (uint32_t)((size_t)(slot - loop->watches) + 1u);' \
+    'slot->next_free = 0;'
 
-printf '%s\n' "mutation check: 6/6 killed"
+printf '%s\n' "mutation check: 8/8 killed"

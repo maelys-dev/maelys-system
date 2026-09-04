@@ -1,7 +1,8 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-/* Exposes pthread_cond_timedwait_relative_np under -std=c11 on macOS. */
+/* Keeps pthread_cond_timedwait_relative_np declared by the macOS SDK even
+ * if a feature macro such as _POSIX_C_SOURCE is ever defined. */
 #ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
 #endif

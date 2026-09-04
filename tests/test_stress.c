@@ -105,6 +105,8 @@ static int timer_and_generation_stress(void) {
             (maelys_sys_token_t)i, &watch) == MAELYS_SYS_OK);
         CHECK(watch != previous);
         if (previous) {
+            /* The freed slot is reused: same index, next generation. */
+            CHECK((uint32_t)watch == (uint32_t)previous);
             CHECK(maelys_sys_loop_unwatch(loop, previous) ==
                 MAELYS_SYS_ERR_NOT_FOUND);
         }
@@ -155,13 +157,72 @@ static int timer_rearm_stress(void) {
     return 0;
 }
 
+/*
+ * Thousands of due timers inserted in shuffled order, most of them
+ * cancelled so dead nodes sit at interior heap positions and force a
+ * compaction; every survivor must then fire in deadline order. A rebuilt
+ * heap that lost its invariant fires out of order.
+ */
+static int timer_compaction_order(void) {
+    enum { ORDER_COUNT = 4000 };
+    static maelys_sys_timer_t timers[ORDER_COUNT];
+    maelys_sys_loop_t *loop = NULL;
+    CHECK(maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) == MAELYS_SYS_OK);
+    uint64_t now = 0;
+    CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+    uint64_t base = now >= ORDER_COUNT ? now - ORDER_COUNT : 0u;
+    for (size_t i = 0; i < ORDER_COUNT; ++i) {
+        /* An odd multiplier coprime with ORDER_COUNT: a permutation. */
+        uint64_t deadline = base + (uint64_t)((i * 2654435761u) % ORDER_COUNT);
+        CHECK(maelys_sys_loop_timer_add(
+            loop, deadline, deadline, &timers[i]) == MAELYS_SYS_OK);
+    }
+    uint32_t seed = 12345u;
+    size_t expected = ORDER_COUNT;
+    for (size_t i = 0; i < ORDER_COUNT; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        if ((seed >> 16) % 5u < 3u) {
+            CHECK(maelys_sys_loop_timer_cancel(loop, timers[i]) == MAELYS_SYS_OK);
+            --expected;
+        }
+    }
+    uint64_t previous = 0;
+    size_t fired = 0;
+    while (fired < expected) {
+        maelys_sys_event_t events[7];
+        size_t count = 0;
+        maelys_sys_step_result_t step = MAELYS_SYS_STEP_TIMEOUT;
+        CHECK(maelys_sys_loop_step(loop, base + ORDER_COUNT + 1000u,
+            events, 7, &count, &step) == MAELYS_SYS_OK);
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS);
+        for (size_t i = 0; i < count; ++i) {
+            CHECK(events[i].flags == MAELYS_SYS_EVENT_TIMER);
+            CHECK(events[i].token >= previous);
+            previous = events[i].token;
+        }
+        fired += count;
+    }
+    CHECK(fired == expected);
+    maelys_sys_event_t event;
+    size_t count = 0;
+    maelys_sys_step_result_t step = MAELYS_SYS_STEP_PROGRESS;
+    CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_step(loop, now, &event, 1, &count, &step) ==
+        MAELYS_SYS_OK);
+    CHECK(step == MAELYS_SYS_STEP_TIMEOUT && count == 0);
+    CHECK(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
+    return 0;
+}
+
 int main(void) {
     if (readiness_stress(MAELYS_SYS_LOOP_POLL) != 0) return 1;
     if (readiness_stress(MAELYS_SYS_LOOP_AUTO) != 0) return 1;
     if (timer_and_generation_stress() != 0) return 1;
     if (timer_rearm_stress() != 0) return 1;
+    if (timer_compaction_order() != 0) return 1;
     puts("ok - readiness stress");
     puts("ok - timer and generation stress");
     puts("ok - timer re-arm stress");
+    puts("ok - timer compaction order");
     return 0;
 }

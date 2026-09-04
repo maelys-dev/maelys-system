@@ -1,15 +1,17 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies six one-line faults and requires the existing tests to
+directories, applies eight one-line faults and requires the existing tests to
 reject every mutant:
 
 - generation increment removed;
 - stale watch generation accepted;
 - timer heap order reversed;
 - caller deadline incorrectly preferred over an earlier timer;
-- timer application token discarded; and
-- wake consumed while the caller's event array is already full.
+- timer application token discarded;
+- wake consumed while the caller's event array is already full;
+- compacted timer heap not rebuilt into a heap; and
+- freed watch slot never returned to the free list.
 
 The sweep is deterministic and has a 30-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the

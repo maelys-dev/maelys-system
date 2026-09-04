@@ -139,14 +139,19 @@ tsan:
 	$(MAKE) clean
 	$(MAKE) check BUILD=build/tsan CFLAGS='-O1 -g -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
 
-# Findings are errors. BlockInCriticalSection is disabled: it flags the
-# non-blocking read of the wakeup pipe under the wakeup mutex.
+# Findings are errors. unix.BlockInCriticalSection flags the non-blocking
+# read of the wakeup pipe under the wakeup mutex; it is disabled where it
+# exists under that name (clang 19 and later; before, it is an alpha
+# checker that is off by default, and naming it is a fatal error).
 analyze:
-	@for source in $(SOURCES); do \
+	@disable=''; \
+	if $(CC) -cc1 -analyzer-checker-help 2>/dev/null | \
+		grep -q '^ *unix\.BlockInCriticalSection'; then \
+		disable='-Xanalyzer -analyzer-disable-checker -Xanalyzer unix.BlockInCriticalSection'; \
+	fi; \
+	for source in $(SOURCES); do \
 		$(CC) --analyze -Xanalyzer -analyzer-output=text \
-			-Xanalyzer -analyzer-werror \
-			-Xanalyzer -analyzer-disable-checker \
-			-Xanalyzer unix.BlockInCriticalSection \
+			-Xanalyzer -analyzer-werror $$disable \
 			$(CPPFLAGS) $(COMMON_CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
 	done
 
