@@ -40,7 +40,9 @@ CONSUMER_TEST := $(BUILD)/tests/test_consumers
 STRESS_TEST := $(BUILD)/tests/test_stress
 FAULT_TEST := $(BUILD)/tests/test_faults
 BACKEND_TEST := $(BUILD)/tests/test_backends
-TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST)
+INTERNAL_TEST := $(BUILD)/tests/test_internals
+TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
+	$(INTERNAL_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
@@ -91,6 +93,7 @@ test: $(TESTS)
 	$(CONSUMER_TEST)
 	$(FAULT_TEST)
 	$(STRESS_TEST)
+	$(INTERNAL_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

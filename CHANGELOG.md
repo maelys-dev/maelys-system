@@ -30,8 +30,10 @@
 - Build: header dependency tracking (`-MMD`), `-fPIC`, `make analyze` fails
   on findings, the version test reads the `VERSION` file through the
   Makefile instead of a literal, CI actions pinned by commit.
-- Tests: a timer compaction order test and a watch slot reuse check, plus
-  two reactor mutants (compacted heap not rebuilt, freed slot not reused).
+- Tests: a timer compaction order test, a watch slot reuse check, and a
+  white-box `tests/test_internals.c` that checks the timer heap invariant
+  and the dead-node count after every operation of a random workload
+  against a reference model; four reactor mutants added (10 in all).
 
 ## 0.5.5 - 2026-09-03
 

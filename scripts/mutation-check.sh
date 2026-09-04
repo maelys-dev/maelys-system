@@ -53,5 +53,9 @@ run_mutant compacted-heap-not-rebuilt \
 run_mutant freed-watch-slot-not-reused \
     'loop->free_watch = (uint32_t)((size_t)(slot - loop->watches) + 1u);' \
     'slot->next_free = 0;'
+run_mutant dead-timer-not-counted \
+    '++loop->timer_heap_dead;' '(void)loop->timer_heap_dead;'
+run_mutant dead-count-kept-after-compaction \
+    'loop->timer_heap_dead = 0;' '(void)loop->timer_heap_dead;'
 
-printf '%s\n' "mutation check: 8/8 killed"
+printf '%s\n' "mutation check: 10/10 killed"
