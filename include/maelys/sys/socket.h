@@ -135,7 +135,7 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_release(
  * A handle whose connection failed may be detached. NULL and an already-NULL
  * handle are ERR_ARGUMENT: there is no descriptor to give.
  */
-maelys_sys_result_t maelys_sys_socket_detach(
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_detach(
     maelys_sys_socket_t **socket_handle,
     int *out_fd);
 
