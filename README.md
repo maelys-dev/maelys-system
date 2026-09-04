@@ -65,6 +65,9 @@ the optional umbrella header `maelys/sys.h`.
   handles which are already non-blocking, close-on-exec and SIGPIPE-safe.
 - Socket connect, bind, listen, accept and I/O functions make one mechanical
   POSIX decision. DNS, retry order, TLS and protocol policy remain consumers.
+- `maelys_sys_socket_detach(&handle, &fd)` hands the descriptor to the caller
+  and frees the handle without closing; a connection still in progress is
+  refused so that completion stays with `connect_complete`.
 - Wakeup destruction requires all concurrent signalers to have stopped.
 - Mutexes and conditions must not be destroyed while another thread uses them.
 - On `MAELYS_SYS_ERR_OS`, `errno` identifies the failed POSIX operation.

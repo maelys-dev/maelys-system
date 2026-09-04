@@ -203,7 +203,91 @@ static int test_socket_connect_refused(void) {
     ASSERT_TRUE(maelys_sys_socket_connect_start(client,
         (const struct sockaddr *)&address, address_length, &state) ==
         MAELYS_SYS_ERR_STATE);
+    /* A failed connection may be detached: the caller knows what it holds. */
+    {
+        int detached = -1;
+        ASSERT_TRUE(maelys_sys_socket_detach(&client, &detached) == MAELYS_SYS_OK);
+        ASSERT_TRUE(client == NULL && detached >= 0);
+        ASSERT_TRUE(maelys_sys_fd_close(&detached) == MAELYS_SYS_OK);
+    }
+    return 0;
+}
+
+/*
+ * detach hands the descriptor over: the handle is gone, the descriptor
+ * stays open, non-blocking and close-on-exec, and the caller may make it
+ * blocking and keep using it. A connection in progress is not detachable.
+ */
+static int test_socket_detach(void) {
+    maelys_sys_socket_t *listener = NULL;
+    maelys_sys_socket_t *client = NULL;
+    maelys_sys_socket_t *accepted = NULL;
+    struct sockaddr_in address;
+    socklen_t address_length = (socklen_t)sizeof(address);
+    maelys_sys_connect_state_t state;
+    int detached = -1;
+    int flags;
+    size_t transferred = 0u;
+    char buffer[4] = {0};
+
+    ASSERT_TRUE(maelys_sys_socket_detach(NULL, &detached) == MAELYS_SYS_ERR_ARGUMENT);
+    ASSERT_TRUE(detached == -1);
+    ASSERT_TRUE(maelys_sys_socket_detach(&client, &detached) ==
+        MAELYS_SYS_ERR_ARGUMENT);
+
+    ASSERT_TRUE(maelys_sys_socket_create(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, &listener) == MAELYS_SYS_OK);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_TRUE(maelys_sys_socket_bind(listener,
+        (const struct sockaddr *)&address,
+        (socklen_t)sizeof(address)) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_listen(listener, 1) == MAELYS_SYS_OK);
+    ASSERT_TRUE(getsockname(maelys_sys_socket_native_fd(listener),
+        (struct sockaddr *)&address, &address_length) == 0);
+
+    ASSERT_TRUE(maelys_sys_socket_create(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_detach(client ? &client : NULL, NULL) ==
+        MAELYS_SYS_ERR_ARGUMENT);
+    ASSERT_TRUE(client != NULL);
+    ASSERT_TRUE(maelys_sys_socket_connect_start(client,
+        (const struct sockaddr *)&address, address_length, &state) ==
+        MAELYS_SYS_OK);
+    if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
+        ASSERT_TRUE(maelys_sys_socket_detach(&client, &detached) ==
+            MAELYS_SYS_ERR_STATE);
+        ASSERT_TRUE(client != NULL && detached == -1);
+        ASSERT_TRUE(wait_descriptor(
+            maelys_sys_socket_native_fd(client), POLLOUT));
+        ASSERT_TRUE(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_OK);
+    }
+    ASSERT_TRUE(maelys_sys_socket_detach(&client, &detached) == MAELYS_SYS_OK);
+    ASSERT_TRUE(client == NULL && detached >= 0);
     ASSERT_TRUE(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
+
+    flags = fcntl(detached, F_GETFD);
+    ASSERT_TRUE(flags >= 0 && (flags & FD_CLOEXEC) != 0);
+    flags = fcntl(detached, F_GETFL);
+    ASSERT_TRUE(flags >= 0 && (flags & O_NONBLOCK) != 0);
+    ASSERT_TRUE(maelys_sys_fd_set_blocking(detached) == MAELYS_SYS_OK);
+    ASSERT_TRUE((fcntl(detached, F_GETFL) & O_NONBLOCK) == 0);
+    ASSERT_TRUE(maelys_sys_socket_send_nosigpipe(
+        detached, "x", 1u, &transferred) == MAELYS_SYS_OK);
+    ASSERT_TRUE(transferred == 1u);
+
+    ASSERT_TRUE(wait_descriptor(maelys_sys_socket_native_fd(listener), POLLIN));
+    ASSERT_TRUE(maelys_sys_socket_accept(
+        listener, NULL, NULL, &accepted) == MAELYS_SYS_OK);
+    ASSERT_TRUE(wait_descriptor(maelys_sys_socket_native_fd(accepted), POLLIN));
+    ASSERT_TRUE(maelys_sys_socket_receive(
+        accepted, buffer, sizeof(buffer), &transferred) == MAELYS_SYS_OK);
+    ASSERT_TRUE(transferred == 1u && buffer[0] == 'x');
+
+    ASSERT_TRUE(maelys_sys_fd_close(&detached) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_release(&accepted) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
     return 0;
 }
 
@@ -698,6 +782,7 @@ int main(void) {
         test_fd_contracts,
         test_socket_lifecycle,
         test_socket_connect_refused,
+        test_socket_detach,
         test_socket_unix_backlog,
         test_socket_send,
         test_socket_send_deadline,
@@ -711,6 +796,7 @@ int main(void) {
         "fd contracts",
         "socket lifecycle",
         "socket connect refused",
+        "socket detach",
         "socket unix backlog",
         "socket send",
         "socket send deadline",

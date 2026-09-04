@@ -125,6 +125,20 @@ maelys_sys_result_t maelys_sys_socket_accept(
 maelys_sys_result_t maelys_sys_socket_release(
     maelys_sys_socket_t **socket_handle);
 
+/*
+ * Gives the descriptor to the caller and frees the handle without closing
+ * anything; *socket_handle becomes NULL and the caller owns *out_fd. The
+ * descriptor keeps close-on-exec and non-blocking mode; a caller that needs
+ * a blocking descriptor calls maelys_sys_fd_set_blocking. A connection
+ * started and not yet completed is refused with ERR_STATE, and the handle
+ * is left intact: finishing it is connect_complete's job, not the caller's.
+ * A handle whose connection failed may be detached. NULL and an already-NULL
+ * handle are ERR_ARGUMENT: there is no descriptor to give.
+ */
+maelys_sys_result_t maelys_sys_socket_detach(
+    maelys_sys_socket_t **socket_handle,
+    int *out_fd);
+
 #ifdef __cplusplus
 }
 #endif
