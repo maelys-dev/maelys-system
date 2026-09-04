@@ -3,8 +3,10 @@
 `libmaelys-sys` is a deliberately small, standalone POSIX systems foundation
 for security-sensitive C programs. It decides low-level semantics once: clocks
 and deadlines, descriptor ownership, mechanical POSIX socket lifecycle,
-SIGPIPE-safe socket writes, wakeups,
-opaque synchronization handles and callback-free readiness dispatch.
+SIGPIPE-safe socket writes, trusted-file identity, bounded reads, durable
+exclusive writes, no-replace publication, identity-checked file locks,
+wakeups, opaque synchronization handles and callback-free readiness
+dispatch.
 
 Supported platforms for the 0.x series are Linux (amd64/arm64) and macOS on
 Apple Silicon. The API is explicitly POSIX and may accept `int` descriptors;

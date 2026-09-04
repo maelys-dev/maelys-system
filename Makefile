@@ -31,8 +31,8 @@ endif
 ifeq ($(UNAME_S),Darwin)
 PLATFORM_SOURCE := src/loop_kqueue.c
 endif
-SOURCES := src/result.c src/clock.c src/fd.c src/socket.c src/wakeup.c src/thread.c \
-	src/loop.c src/loop_poll.c $(PLATFORM_SOURCE)
+SOURCES := src/result.c src/clock.c src/fd.c src/file.c src/socket.c src/wakeup.c \
+	src/thread.c src/loop.c src/loop_poll.c $(PLATFORM_SOURCE)
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES))
 LIB := $(BUILD)/lib/libmaelys_sys.a
 TEST := $(BUILD)/tests/test_sys
@@ -41,8 +41,10 @@ STRESS_TEST := $(BUILD)/tests/test_stress
 FAULT_TEST := $(BUILD)/tests/test_faults
 BACKEND_TEST := $(BUILD)/tests/test_backends
 INTERNAL_TEST := $(BUILD)/tests/test_internals
+FILE_TEST := $(BUILD)/tests/test_file
+FILE_FAULT_TEST := $(BUILD)/tests/test_file_faults
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
-	$(INTERNAL_TEST)
+	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
@@ -94,6 +96,8 @@ test: $(TESTS)
 	$(FAULT_TEST)
 	$(STRESS_TEST)
 	$(INTERNAL_TEST)
+	$(FILE_TEST)
+	$(FILE_FAULT_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

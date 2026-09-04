@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Add `maelys/sys/file.h`, the file primitives seven Maelys repositories
+  had each written for themselves: trusted-file expectations and identity
+  (`verify`, `path_identity`, `identity_same`, `open_trusted`), a bounded
+  read that bounds on bytes read, an exclusive durable write (created
+  0600, content, `fchmod`, sync), `file_sync` and `directory_sync` with
+  `F_FULLFSYNC` first on macOS, no-replace publication of a file or a
+  directory by `renameat2(RENAME_NOREPLACE)` / `renamex_np(RENAME_EXCL)`
+  with no fallback, and an identity-checked `flock` handle verified before
+  and after the lock with the path re-resolved to the locked inode. Three
+  result codes appended: `ERR_EXISTS`, `ERR_BUSY`, `ERR_IDENTITY`. ABI 1
+  preserved.
+- Tests: `tests/test_file.c` through the public API and
+  `tests/test_file_faults.c`, which compiles `src/file.c` with a fault
+  point before every system call and checks each failure path's promise.
+
 ## 0.6.0 - 2026-09-04
 
 - Watch registration is O(1): a descriptor-indexed table rejects duplicates
