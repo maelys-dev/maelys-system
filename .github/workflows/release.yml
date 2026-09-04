@@ -1,7 +1,7 @@
 name: release
 
-# Managed by maelys-release v0.2.8 (0.2.8). Regenerate with
-# scripts/adopt.sh of maelys-release; do not edit by hand.
+# Managed by maelys-release v0.5.0 (0.5.0). Regenerate with
+# 'maelys-release adopt' of maelys-release; do not edit by hand.
 on:
   push:
     tags: ["v*"]
@@ -20,18 +20,19 @@ permissions:
 jobs:
   release:
     if: github.event_name == 'push'
-    uses: maelys-dev/maelys-release/.github/workflows/release.yml@c1225e73685fb23f0fc8501dc6438fcef79f6fb4 # v0.2.8
+    uses: maelys-dev/maelys-release/.github/workflows/release.yml@c32b614f4fc65c4f3dc9d99d6a45f2b97b2c773e # v0.5.0
     permissions:
       contents: write
       id-token: write
       attestations: write
     with:
       product: maelys-system
+      linux_packages: build-essential dpkg-dev file rpm python3
 
   tap-libmaelys-sys:
     needs: release
     if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
-    uses: maelys-dev/maelys-release/.github/workflows/tap.yml@c1225e73685fb23f0fc8501dc6438fcef79f6fb4 # v0.2.8
+    uses: maelys-dev/maelys-release/.github/workflows/tap.yml@c32b614f4fc65c4f3dc9d99d6a45f2b97b2c773e # v0.5.0
     permissions:
       contents: write
       id-token: write
