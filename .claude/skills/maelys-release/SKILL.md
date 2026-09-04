@@ -6,7 +6,7 @@ description: Release a Maelys product through the shared maelys-release socle, o
 # Releasing a Maelys product
 
 The product is `maelys-system`; its release mechanics come from maelys-release
-v0.5.0 (`docs/conventions.md` there is normative).
+v0.6.1 (`docs/conventions.md` there is normative).
 
 ## Cut a release
 
@@ -16,7 +16,7 @@ v0.5.0 (`docs/conventions.md` there is normative).
    that will be tagged.
 2. Merge through a pull request with green CI.
 3. Run `bin/maelys-release preflight .` from a maelys-release checkout at
-   v0.5.0; it exits 2 on anything the workflow would refuse (signing
+   v0.6.1; it exits 2 on anything the workflow would refuse (signing
    configuration, previous tag, existing `vX.Y.Z`, `release` environment
    not limited to tags `v*`).
 4. Tag the merge commit: `git tag -s vX.Y.Z -m "maelys-system X.Y.Z"`, then
@@ -48,8 +48,9 @@ the first Linux build of the product.
 - `adapter/PACKAGES`: the apt (`[linux]`) and brew (`[macos]`) packages the
   build needs, one per line. Nothing else installs packages in a release
   or in CI: `.github/workflows/ci.yml` calls the socle's
-  `check-product.yml` with the same declarations; keep that job, add yours
-  next to it.
+  `check-product.yml`, which reads the declarations itself; keep that job,
+  add yours next to it. `adopt` updates its socle line, `check` warns when
+  it is missing.
 - `scripts/package-release.sh TARGET`: must leave every artifact and its
   `.sha256` in `dist/`; keep it runnable locally.
 - packaging/homebrew/libmaelys-sys.rb.in: placeholders `@URL@`, `@VERSION@`,
