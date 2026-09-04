@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.6 - 2026-09-04
 
 - Add `maelys_sys_socket_detach`: the handle gives its descriptor to the
   caller and is freed without closing, so an integrator can own a socket
