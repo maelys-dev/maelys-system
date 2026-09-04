@@ -26,16 +26,20 @@ extern "C" {
  * chooses a directory, applies a naming rule, hashes content or decides a
  * permission policy: those remain product decisions.
  *
- * Contracted file systems: local ones. NFS and SMB are outside every
- * guarantee below (atomicity of no-replace publication, locking, and
- * durability); the header says so once and the functions do not detect it.
+ * Contracted file systems: local ones with the no-replace rename flag
+ * (ext4, xfs, btrfs, tmpfs and overlayfs on Linux 3.15 and later; APFS and
+ * HFS+). NFS, SMB, exFAT and FUSE file systems are outside every guarantee
+ * below, for publication atomicity, locking and durability alike; the
+ * functions report what the kernel refuses and detect nothing else.
+ *
+ * errno is meaningful on ERR_OS only, as everywhere in this library.
  */
 
 /*
  * What the caller expects of a regular file before trusting it. A
- * zero-initialised value (`= {0}`) requires only a regular file; each field
- * adds a check. Every product surveyed wanted some subset of these; none
- * wanted anything else.
+ * zero-initialised value (`= {0}`), or NULL wherever a pointer to it is
+ * accepted, requires only a regular file; each field adds a check. Every
+ * product surveyed wanted some subset of these; none wanted anything else.
  */
 typedef struct maelys_sys_file_expectations {
     /* Required owner, typically geteuid(). Checked only when check_owner. */
@@ -48,16 +52,28 @@ typedef struct maelys_sys_file_expectations {
     mode_t forbidden_mode_bits;
     /* Require exactly one hard link: no alias can rewrite it elsewhere. */
     int require_single_link;
-    /* Reject a file larger than maximum_size bytes when bound_size is set. */
+    /* Reject a file larger than maximum_size bytes when bound_size is set;
+     * with maximum_size 0 only an empty file passes. */
     int bound_size;
     uint64_t maximum_size;
 } maelys_sys_file_expectations_t;
 
+/* Which expectation a file failed. TYPE also covers what open(2) refused
+ * before any check: a symbolic link (ELOOP), a directory, a FIFO or a
+ * socket the kernel would not open as a file. */
+typedef enum maelys_sys_file_mismatch {
+    MAELYS_SYS_FILE_MATCH = 0,
+    MAELYS_SYS_FILE_MISMATCH_TYPE,
+    MAELYS_SYS_FILE_MISMATCH_OWNER,
+    MAELYS_SYS_FILE_MISMATCH_MODE,
+    MAELYS_SYS_FILE_MISMATCH_LINKS,
+    MAELYS_SYS_FILE_MISMATCH_SIZE
+} maelys_sys_file_mismatch_t;
+
 /*
- * A snapshot of a file's identity, taken by verify or by path_identity and
- * compared later with identity_same to prove that the file seen first is
- * the file seen last. POSIX scalars only; the library exposes no struct
- * stat.
+ * A snapshot of a file's identity, taken by verify or by path_identity.
+ * POSIX scalars only; the library exposes no struct stat. The fields are
+ * fixed: a consumer's copy compiled against this ABI stays complete.
  */
 typedef struct maelys_sys_file_identity {
     dev_t device;
@@ -71,27 +87,30 @@ typedef struct maelys_sys_file_identity {
 /*
  * Checks an open descriptor against the expectations with fstat(2) and
  * records its identity. ERR_IDENTITY when the descriptor is not a regular
- * file or any expectation fails; errno is then EPERM for ownership and
- * mode, EMLINK for the link count, EFBIG for the size, EISDIR or EINVAL for
- * the file type. On ERR_OS errno identifies fstat(2). out_identity may be
- * NULL.
+ * file or any expectation fails; *out_mismatch then says which, when the
+ * pointer is given. On ERR_OS errno identifies fstat(2). out_identity and
+ * out_mismatch may be NULL.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_verify(
     int fd,
     const maelys_sys_file_expectations_t *expectations,
-    maelys_sys_file_identity_t *out_identity);
+    maelys_sys_file_identity_t *out_identity,
+    maelys_sys_file_mismatch_t *out_mismatch);
 
 /*
  * Identity of the object a path names, without following a final symbolic
- * link. A symbolic link is reported as such through mode and rejected by
- * verify-style callers; the function itself refuses nothing. ERR_NOT_FOUND
- * when nothing is there.
+ * link. A symbolic link is reported as such through mode; the function
+ * itself refuses nothing. ERR_NOT_FOUND when nothing is there.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_path_identity(
     const char *path,
     maelys_sys_file_identity_t *out_identity);
 
-/* Same device, inode, mode, link count, owner and size. NULL is never equal. */
+/*
+ * Same file: same device and inode, nothing else. Size, mode, links and
+ * owner are data about the file at snapshot time, not its identity; a lock
+ * file that grew is still the locked file. NULL is never the same.
+ */
 int maelys_sys_file_identity_same(
     const maelys_sys_file_identity_t *first,
     const maelys_sys_file_identity_t *second);
@@ -101,23 +120,28 @@ int maelys_sys_file_identity_same(
  * not following a final symbolic link, and with O_NONBLOCK during open(2)
  * so that a FIFO planted at the path cannot suspend the caller; the flag is
  * cleared before the descriptor is returned. The descriptor is then checked
- * with maelys_sys_file_verify. On ERR_IDENTITY nothing is returned and
- * the file is left untouched. The caller owns *out_fd.
+ * with maelys_sys_file_verify. What open(2) itself refuses because the
+ * object is not a plain file (ELOOP, EISDIR, ENXIO, EOPNOTSUPP) is
+ * ERR_IDENTITY with MISMATCH_TYPE, so the same object gives the same result
+ * on both hosts. On ERR_IDENTITY no descriptor is returned and no data was
+ * read. The caller owns *out_fd. ERR_NOT_FOUND when nothing is there.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_open_trusted(
     const char *path,
     const maelys_sys_file_expectations_t *expectations,
     maelys_sys_file_identity_t *out_identity,
+    maelys_sys_file_mismatch_t *out_mismatch,
     int *out_fd);
 
 /*
  * Reads the whole file from its current offset into the caller's buffer.
  * The bound is the buffer: the function reads until end of file and fails
  * with ERR_CAPACITY when the file holds more than capacity bytes, which
- * also catches a file that grows while it is read; a file that shrinks
- * simply ends early and *out_size says how much arrived. EINTR is retried.
- * Nothing is allocated: size the buffer from the identity that verify
- * returned, or from a fixed limit.
+ * also catches a file that grows while it is read; a file of exactly
+ * capacity bytes succeeds. A file that shrinks simply ends early and
+ * *out_size says how much arrived. EINTR is retried. After ERR_CAPACITY
+ * the descriptor's offset is unspecified. Nothing is allocated: size the
+ * buffer from the identity that verify returned, or from a fixed limit.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_read_bounded(
     int fd,
@@ -126,13 +150,30 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_read_bounded(
     size_t *out_size);
 
 /*
+ * Makes a descriptor's content durable. Linux: fsync(2). macOS: fsync(2)
+ * leaves data in the drive's cache, so fcntl(F_FULLFSYNC) is issued first
+ * and fsync(2) only when the volume refuses it; the guarantee there is the
+ * best the platform offers, as the close-on-exec guarantee already is.
+ * Content only: the directory entry needs directory_sync or a publish with
+ * sync_parent.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_sync(int fd);
+
+/* Same for a directory's entries, opened by path without following a link.
+ * On Linux this is the documented way to persist a rename, link or unlink. */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_sync(
+    const char *path);
+
+/*
  * Creates path exclusively (ERR_EXISTS if anything is there, a symbolic
- * link included), writes every byte, applies final_mode, fsync(2)s and
- * closes; a failure at any point removes the file and reports it. The file
- * is created with mode 0600 and only receives final_mode after its content,
- * so a partial file is never readable under the final permissions. bytes
- * may be NULL when length is 0. Durability covers the file, not the
- * directory entry: publish the file or call directory_sync for that.
+ * link included), writes every byte, applies final_mode, makes the content
+ * durable as file_sync does, and closes. The file is created with mode
+ * 0600 under the umask and only receives final_mode, which fchmod(2)
+ * applies as given without the umask, after its content, so a partial file
+ * is never readable under the final permissions. On any failure the file
+ * is removed, by unlink(2) of path only if path still names the file that
+ * was created, and the failure reported. bytes may be NULL when length is
+ * 0. Durability covers the file, not its directory entry.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
     const char *path,
@@ -140,34 +181,27 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
     size_t length,
     mode_t final_mode);
 
-/*
- * Makes a directory's entries durable: fsync(2) on the directory itself.
- * On Linux this is the documented way to persist a rename, link or
- * unlink. On macOS fsync(2) does not reach the medium; the function issues
- * fcntl(F_FULLFSYNC) and falls back to fsync(2) when the volume refuses it,
- * so the guarantee there is the best the platform offers, as the
- * close-on-exec guarantee already is.
- */
-MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_sync(
-    const char *path);
-
 typedef struct maelys_sys_publish_options {
-    /* Also make the destination's parent directory durable on success. */
+    /* Also make the destination's parent directory durable on success. The
+     * parent is the destination path up to its last separator, resolved
+     * again after the rename. */
     int sync_parent;
 } maelys_sys_publish_options_t;
 
 /*
- * Publishes a staged file under a new name: the destination appears
- * atomically and is never replaced. ERR_EXISTS when the destination
- * already exists, whatever it is, and the staged file is left in place.
- * The mechanism is renameat2(RENAME_NOREPLACE) on Linux and
- * renamex_np(RENAME_EXCL) on macOS; when the file system refuses the flag,
- * the file is published by link(2), which is exclusive by construction,
- * then the staged name is removed. The unsafe fallback of checking the
- * destination and then renaming is never used. If publication succeeded
- * but the staged name could not be removed, the call is a success and
- * errno holds the unlink(2) error: the destination is what matters, the
- * caller may retry the removal. options may be NULL.
+ * Publishes a staged regular file under a new name: the destination
+ * appears atomically and is never replaced, by renameat2(RENAME_NOREPLACE)
+ * on Linux and renamex_np(RENAME_EXCL) on macOS. staging must name a
+ * regular file without following a link (ERR_IDENTITY otherwise: the two
+ * hosts disagree on what linking a symbolic link means, so it is refused
+ * rather than interpreted). ERR_EXISTS when the destination already
+ * exists, whatever it is, and when staging and destination already name
+ * the same file; the staged file is then left in place. When the file
+ * system refuses the flag (EINVAL on Linux, ENOTSUP on macOS) the call
+ * fails with ERR_UNSUPPORTED and nothing moved: there is no fallback, the
+ * unsafe one of checking the destination and then renaming least of all,
+ * and link(2) is not exclusive on every contracted file system nor
+ * atomic for a reader counting links. options may be NULL.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_publish_noreplace(
     const char *staging,
@@ -175,10 +209,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_publish_noreplace(
     const maelys_sys_publish_options_t *options);
 
 /*
- * Same for a directory. There is no exclusive fallback for a directory:
- * when the file system refuses RENAME_NOREPLACE the call fails with
- * ERR_UNSUPPORTED and nothing moved. Contracted on ext4, xfs, btrfs and
- * tmpfs (Linux 3.15 and later) and on APFS and HFS+.
+ * Same for a directory. EINVAL also names a destination inside the staged
+ * directory itself; it is reported as ERR_UNSUPPORTED like a refused flag,
+ * nothing moved in either case.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_publish_noreplace(
     const char *staging,
@@ -187,22 +220,35 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_publish_noreplace(
 
 /*
  * Advisory lock on a file whose identity is checked before and after the
- * lock is taken. The handle owns the descriptor; the lock belongs to that
- * open file description and ends with release, with the process, or with
- * a crash, never because another descriptor on the same file was closed
- * elsewhere in the process, which is why flock(2) is used and not fcntl
- * locks. Two processes on two hosts sharing a network file system may both
- * succeed; that is a reason not to put a lock there.
+ * lock is taken. The handle owns the descriptor. The lock belongs to the
+ * open file description and lives as long as any descriptor of it does:
+ * until release, until the process ends, or in a child that inherited the
+ * descriptor across fork(2) until that child closes it, which is why a
+ * process launcher closes inherited descriptors after fork as fd.h
+ * already requires. It never ends because another descriptor on the same
+ * file was closed elsewhere in the process, which is why flock(2) is used
+ * and not fcntl locks. Never combine it with fcntl(2) locks on the same
+ * file: macOS makes the two kinds conflict, Linux does not. Two processes
+ * on two hosts sharing a network file system may both succeed; that is a
+ * reason not to put a lock there.
  */
 typedef struct maelys_sys_file_lock maelys_sys_file_lock_t;
 
 typedef struct maelys_sys_file_lock_options {
     /* Exclusive (LOCK_EX) rather than shared (LOCK_SH). */
     int exclusive;
-    /* Wait for the lock; otherwise ERR_BUSY when it is held elsewhere. */
+    /* Wait for the lock; otherwise ERR_BUSY when it is held elsewhere.
+     * flock(2) offers no deadline: a caller that needs one polls with
+     * wait off and its own absolute deadline. */
     int wait;
-    /* Create the lock file when absent, mode 0600. Off: ERR_NOT_FOUND. */
+    /* Create the lock file when absent, mode 0600 under the umask. Off:
+     * ERR_NOT_FOUND. A symbolic link at the path is never followed nor
+     * replaced: ERR_IDENTITY. */
     int create;
+    /* Open the file read-write, for a holder that records something in
+     * it. Off: read-only, which flock(2) accepts on both hosts and which a
+     * mode 0400 file allows. */
+    int writable;
     /* Applied to the file before the lock and re-checked after it. NULL
      * requires a regular file with exactly one link, owned by the caller,
      * with no group or other permission bits. */
@@ -210,13 +256,14 @@ typedef struct maelys_sys_file_lock_options {
 } maelys_sys_file_lock_options_t;
 
 /*
- * Opens path read-write, close-on-exec, without following a final symbolic
- * link, with O_NONBLOCK during open(2) then cleared; verifies the
- * descriptor; takes the lock, retrying on EINTR when waiting; then verifies
- * again and confirms that path still names the locked file (same device
- * and inode). Any mismatch releases everything and reports ERR_IDENTITY:
- * a file replaced between open and lock is not a file the caller holds.
- * options may be NULL: exclusive, waiting, creating, default expectations.
+ * Opens path close-on-exec, without following a final symbolic link, with
+ * O_NONBLOCK during open(2) then cleared; verifies the descriptor; takes
+ * the lock, retrying on EINTR when waiting; then verifies again and
+ * confirms that path still names the locked file (same device and inode).
+ * Any mismatch, and what open(2) refuses as not a plain file, releases
+ * everything and reports ERR_IDENTITY: a file replaced between open and
+ * lock is not a file the caller holds. options may be NULL: exclusive,
+ * waiting, creating, read-only, default expectations.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_lock_acquire(
     const char *path,
@@ -228,9 +275,11 @@ int maelys_sys_file_lock_fd(const maelys_sys_file_lock_t *lock);
 
 /*
  * Unlocks, closes and frees; sets *lock to NULL first. NULL and an
- * already-NULL handle are idempotent successes. The lock file is never
- * removed: removing it while another process holds a descriptor would let
- * two holders coexist.
+ * already-NULL handle are idempotent successes. release never removes the
+ * lock file. A holder of the exclusive lock may unlink it itself: another
+ * user of this function that then locks the orphaned inode sees the path
+ * diverge and gets ERR_IDENTITY, but a program locking the same file by
+ * other means does not, so the choice is the caller's.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_lock_release(
     maelys_sys_file_lock_t **lock);

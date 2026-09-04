@@ -7,6 +7,8 @@ int main() {
     maelys_sys_socket_bind_options_t options{};
     maelys_sys_file_expectations_t expectations{};
     maelys_sys_file_lock_options_t lock_options{};
+    maelys_sys_file_mismatch_t mismatch = MAELYS_SYS_FILE_MATCH;
+    (void)mismatch;
     static_assert(MAELYS_SYS_ERR_IDENTITY > MAELYS_SYS_ERR_UNSUPPORTED,
         "new result codes are appended");
     (void)expectations; (void)lock_options;
