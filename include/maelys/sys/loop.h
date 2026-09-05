@@ -55,7 +55,15 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_create(
     maelys_sys_loop_t **out_loop);
 const char *maelys_sys_loop_backend_name(const maelys_sys_loop_t *loop);
 
-/* The loop borrows fd. The owner must unwatch before closing it. */
+/*
+ * The loop borrows fd, a stream descriptor: a socket, pipe, FIFO, terminal
+ * or device. A regular file is refused by epoll and always ready
+ * elsewhere; it is not a watchable object. The owner must unwatch before
+ * closing the descriptor. Should it close first, unwatch still releases
+ * the registration and reports OK; on Linux a dup of that descriptor
+ * keeps the epoll registration, and its events, alive until the dup
+ * closes.
+ */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_watch_fd(
     maelys_sys_loop_t *loop,
     int fd,
@@ -84,6 +92,16 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_timer_cancel(
     maelys_sys_timer_t timer);
 
 /*
+ * Events. READ and WRITE follow the requested interests. HUP is reported
+ * on every backend when the watch includes READ and the peer closed or
+ * shut its writing side; for a watch on WRITE alone the hosts disagree
+ * (Linux reports it, macOS mostly not) and nothing is promised. ERROR is
+ * an indication, not a contract: a reset arrives as READ|HUP|ERROR on
+ * Linux and on kqueue, as READ|HUP on the poll backend of macOS; the read
+ * or write that follows carries the error either way. A watch yields at
+ * most one event per step. A wake that does not fit in the caller's array
+ * stays pending for the next step.
+ *
  * Registration, timers, step and destroy are owner-thread-only. wake and stop
  * are the only cross-thread operations. The loop never invokes callbacks.
  * step accepts MAELYS_SYS_DEADLINE_INFINITE and then waits for an event, timer,

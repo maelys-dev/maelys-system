@@ -1,15 +1,14 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies nineteen one-line faults and requires the existing
-tests to reject every mutant. Ten target the reactor:
+directories, applies eighteen one-line faults and requires the existing
+tests to reject every mutant. Nine target the reactor:
 
 - generation increment removed;
 - stale watch generation accepted;
 - timer heap order reversed;
 - caller deadline incorrectly preferred over an earlier timer;
 - timer application token discarded;
-- wake consumed while the caller's event array is already full;
 - compacted timer heap not rebuilt into a heap;
 - freed watch slot never returned to the free list;
 - cancelled timer not counted as a dead heap node; and

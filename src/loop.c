@@ -62,14 +62,24 @@ static int owner_thread(const maelys_sys_loop_t *loop) {
     return loop && pthread_equal(loop->owner, pthread_self());
 }
 
-static uint64_t make_id(size_t index, uint32_t generation) {
-    return ((uint64_t)generation << 32u) | (uint64_t)(index + 1u);
+/*
+ * An id carries the slot index plus one in its low 32 bits, a 31-bit
+ * generation above, and a kind bit at the top: a timer id is never a watch
+ * id, so a swapped argument is ERR_NOT_FOUND rather than a silent hit.
+ */
+#define ID_KIND_TIMER (UINT64_C(1) << 63)
+#define GENERATION_MASK 0x7fffffffu
+
+static uint64_t make_id(size_t index, uint32_t generation, uint64_t kind) {
+    return kind | ((uint64_t)generation << 32u) | (uint64_t)(index + 1u);
 }
 
 static int split_id(
-    uint64_t id, size_t capacity, size_t *out_index, uint32_t *out_generation) {
+    uint64_t id, uint64_t kind, size_t capacity,
+    size_t *out_index, uint32_t *out_generation) {
     uint32_t low = (uint32_t)id;
-    uint32_t generation = (uint32_t)(id >> 32u);
+    uint32_t generation = (uint32_t)((id >> 32u) & GENERATION_MASK);
+    if ((id & ID_KIND_TIMER) != kind) return 0;
     if (!low || !generation || (size_t)low > capacity) return 0;
     *out_index = (size_t)low - 1u;
     *out_generation = generation;
@@ -78,6 +88,7 @@ static int split_id(
 
 static uint32_t next_generation(uint32_t generation) {
     ++generation;
+    generation &= GENERATION_MASK;
     return generation ? generation : 1u;
 }
 
@@ -222,7 +233,7 @@ maelys_sys_result_t maelys_sys_loop_watch_fd(
     }
     size_t index = (size_t)loop->free_watch - 1u;
     watch_slot_t *slot = &loop->watches[index];
-    uint64_t id = make_id(index, slot->generation);
+    uint64_t id = make_id(index, slot->generation, 0u);
     result = loop->ops->add(loop->backend, fd, interests, id);
     if (result != MAELYS_SYS_OK) return result;
     loop->free_watch = slot->next_free;
@@ -239,7 +250,7 @@ maelys_sys_result_t maelys_sys_loop_watch_fd(
 static watch_slot_t *find_watch(maelys_sys_loop_t *loop, uint64_t id) {
     size_t index = 0;
     uint32_t generation = 0;
-    if (!split_id(id, loop->watch_capacity, &index, &generation)) return NULL;
+    if (!split_id(id, 0u, loop->watch_capacity, &index, &generation)) return NULL;
     watch_slot_t *slot = &loop->watches[index];
     return slot->active && slot->generation == generation ? slot : NULL;
 }
@@ -268,7 +279,15 @@ maelys_sys_result_t maelys_sys_loop_unwatch(
     if (!slot) return MAELYS_SYS_ERR_NOT_FOUND;
     maelys_sys_result_t result = loop->ops->remove(
         loop->backend, slot->fd, slot->interests, watch);
-    if (result != MAELYS_SYS_OK) return result;
+    /* A descriptor closed before unwatch is a contract fault, but the
+     * registration is released all the same: the backend has forgotten it
+     * (ENOENT) or cannot name it (EBADF). A dup of the descriptor keeps
+     * the epoll registration alive until the dup closes; loop.h says so. */
+    if (result != MAELYS_SYS_OK &&
+        !(result == MAELYS_SYS_ERR_NOT_FOUND ||
+          (result == MAELYS_SYS_ERR_OS && errno == EBADF))) {
+        return result;
+    }
     loop->fd_slots[slot->fd] = 0;
     slot->active = 0;
     slot->fd = -1;
@@ -363,7 +382,9 @@ static void heap_pop(maelys_sys_loop_t *loop) {
 static timer_slot_t *find_timer(maelys_sys_loop_t *loop, uint64_t id) {
     size_t index = 0;
     uint32_t generation = 0;
-    if (!split_id(id, loop->timer_capacity, &index, &generation)) return NULL;
+    if (!split_id(id, ID_KIND_TIMER, loop->timer_capacity, &index, &generation)) {
+        return NULL;
+    }
     timer_slot_t *slot = &loop->timers[index];
     return slot->active && slot->generation == generation ? slot : NULL;
 }
@@ -416,7 +437,7 @@ maelys_sys_result_t maelys_sys_loop_timer_add(
     if (result != MAELYS_SYS_OK) return result;
     size_t index = (size_t)loop->free_timer - 1u;
     timer_slot_t *slot = &loop->timers[index];
-    uint64_t id = make_id(index, slot->generation);
+    uint64_t id = make_id(index, slot->generation, ID_KIND_TIMER);
     loop->free_timer = slot->next_free;
     slot->next_free = 0;
     slot->deadline_ms = deadline_ms;
@@ -524,8 +545,11 @@ maelys_sys_result_t maelys_sys_loop_step(
         *out_step_result = MAELYS_SYS_STEP_STOPPED;
         return MAELYS_SYS_OK;
     }
-    if (event_capacity == SIZE_MAX) return MAELYS_SYS_ERR_CAPACITY;
-    maelys_sys_result_t result = reserve_raw(loop, event_capacity + 1u);
+    /* Exactly the caller's capacity: the kernel rotates its ready list on
+     * what was reported, so asking for more than the caller receives would
+     * starve the watches it drops. The wakeup, level-triggered, rotates in
+     * like any other descriptor and stays pending until reported. */
+    maelys_sys_result_t result = reserve_raw(loop, event_capacity);
     if (result != MAELYS_SYS_OK) return result;
     for (;;) {
         uint64_t now = 0;
@@ -542,7 +566,7 @@ maelys_sys_result_t maelys_sys_loop_step(
         if (result != MAELYS_SYS_OK) return result;
         size_t raw_count = 0;
         result = loop->ops->wait(loop->backend, timeout,
-            loop->raw_events, event_capacity + 1u, &raw_count);
+            loop->raw_events, event_capacity, &raw_count);
         if (result == MAELYS_SYS_ERR_OS && errno == EINTR) continue;
         if (result != MAELYS_SYS_OK) return result;
         size_t produced = 0;
@@ -550,11 +574,8 @@ maelys_sys_result_t maelys_sys_loop_step(
         for (size_t i = 0; i < raw_count; ++i) {
             maelys_sys_backend_event_t *raw = &loop->raw_events[i];
             if (raw->watch_id == 0) {
-                if (produced == event_capacity) {
-                    /* No room: leave the pipe readable so the next step
-                     * reports the wake instead of consuming and losing it. */
-                    continue;
-                }
+                /* The backend reported at most event_capacity events, so
+                 * the wake always fits; it is consumed only once reported. */
                 result = maelys_sys_wakeup_consume(loop->wakeup);
                 if (result != MAELYS_SYS_OK) return result;
                 if (atomic_load_explicit(&loop->stopped, memory_order_acquire)) {

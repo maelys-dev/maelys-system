@@ -216,6 +216,11 @@ static int test_write_exclusive_and_sync(void) {
     CHECK(maelys_sys_fd_close(&fd) == MAELYS_SYS_OK);
     CHECK(maelys_sys_file_sync(-1) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_directory_sync(work) == MAELYS_SYS_OK);
+    /* A directory reached through a link is a directory. */
+    CHECK(path_in_work("dirlink", other, sizeof(other)));
+    CHECK(symlink(work, other) == 0);
+    CHECK(maelys_sys_directory_sync(other) == MAELYS_SYS_OK);
+    CHECK(unlink(other) == 0);
     CHECK(maelys_sys_directory_sync(path) == MAELYS_SYS_ERR_OS);
     CHECK(errno == ENOTDIR);
     CHECK(path_in_work("absent", other, sizeof(other)));

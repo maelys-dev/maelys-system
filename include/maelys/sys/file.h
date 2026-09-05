@@ -177,8 +177,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_read_bounded(
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_sync(int fd);
 
-/* Same for a directory's entries, opened by path without following a link.
- * On Linux this is the documented way to persist a rename, link or unlink. */
+/* Same for a directory's entries, opened by path; a final symbolic link is
+ * followed, a directory not being a trusted object here. On Linux this is
+ * the documented way to persist a rename, link or unlink. */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_sync(
     const char *path);
 
@@ -221,7 +222,10 @@ typedef struct maelys_sys_publish_options {
  * fails with ERR_UNSUPPORTED and nothing moved: there is no fallback, the
  * unsafe one of checking the destination and then renaming least of all,
  * and link(2) is not exclusive on every contracted file system nor
- * atomic for a reader counting links. options may be NULL.
+ * atomic for a reader counting links. With sync_parent, an ERR_OS whose
+ * errno comes from open(2) or the sync means the file is published and
+ * its entry may not be durable: retrying reports ERR_EXISTS. options may
+ * be NULL.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_publish_noreplace(
     const char *staging,

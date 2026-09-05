@@ -20,6 +20,10 @@ typedef struct poll_context {
     size_t count;
     size_t capacity;
     size_t scratch_capacity;
+    /* Where the next wait starts reporting among entries 1..count-1, so a
+     * full caller array cannot starve a watch. Entry 0 is the loop's
+     * wakeup, added first and never removed, always examined. */
+    size_t cursor;
 } poll_context_t;
 
 static short poll_interests(unsigned interests) {
@@ -106,6 +110,8 @@ static maelys_sys_result_t poll_remove(
                     (context->count - i - 1u) * sizeof(*context->entries));
             }
             --context->count;
+            if (context->count > 1u) context->cursor %= context->count - 1u;
+            else context->cursor = 0;
             return MAELYS_SYS_OK;
         }
     }
@@ -153,7 +159,11 @@ static maelys_sys_result_t poll_wait(
         return MAELYS_SYS_ERR_OS;
     }
     if (ready > 0) {
-        for (size_t i = 0; i < context->count && *out_count < capacity; ++i) {
+        size_t others = context->count - 1u;
+        size_t last = 0;
+        for (size_t offset = 0; offset < context->count && *out_count < capacity;
+             ++offset) {
+            size_t i = offset == 0 ? 0 : 1u + (context->cursor + offset - 1u) % others;
             unsigned flags = poll_flags(context->scratch[i].revents);
             if (!flags) continue;
             events[*out_count] = (maelys_sys_backend_event_t){
@@ -161,7 +171,9 @@ static maelys_sys_result_t poll_wait(
                 .flags = flags
             };
             ++*out_count;
+            if (i != 0) last = i;
         }
+        if (last != 0) context->cursor = last % others;
     }
     return MAELYS_SYS_OK;
 }

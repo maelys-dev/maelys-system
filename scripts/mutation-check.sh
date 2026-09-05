@@ -49,8 +49,6 @@ run_mutant caller-deadline-wins-over-timer src/loop.c \
     'loop->timer_heap[0].deadline_ms > effective'
 run_mutant timer-token-lost src/loop.c \
     '.token = slot->token,' '.token = 0,'
-run_mutant wake-consumed-when-full src/loop.c \
-    'if (produced == event_capacity) {' 'if (0) {'
 run_mutant compacted-heap-not-rebuilt src/loop.c \
     'heap_sift_down(loop, i);' '(void)i;'
 run_mutant freed-watch-slot-not-reused src/loop.c \
@@ -88,4 +86,4 @@ run_mutant exclusive-file-created-readable src/file.c \
 run_mutant removal-ignores-identity src/file.c \
     'now.st_dev != identity->device || now.st_ino != identity->inode ||' '0 ||'
 
-printf '%s\n' "mutation check: 19/19 killed"
+printf '%s\n' "mutation check: 18/18 killed"

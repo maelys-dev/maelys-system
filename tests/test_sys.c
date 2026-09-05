@@ -72,9 +72,12 @@ static int test_socket_lifecycle(void) {
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(1u);
+    connect_state = MAELYS_SYS_CONNECT_CONNECTED;
     ASSERT_TRUE(maelys_sys_socket_connect_start(unconnected,
         (const struct sockaddr *)&address, (socklen_t)sizeof(address),
         &connect_state) == MAELYS_SYS_ERR_STATE);
+    /* *out_state is written on OK only. */
+    ASSERT_TRUE(connect_state == MAELYS_SYS_CONNECT_CONNECTED);
     ASSERT_TRUE(maelys_sys_socket_release(&unconnected) == MAELYS_SYS_OK);
     listener_fd = maelys_sys_socket_native_fd(listener);
     ASSERT_TRUE(listener_fd >= 0);
@@ -695,6 +698,13 @@ static int exercise_loop_backend(maelys_sys_loop_backend_t backend) {
     ASSERT_TRUE(maelys_sys_loop_timer_add(loop, now, 202, &timer) ==
         MAELYS_SYS_OK);
     ASSERT_TRUE(timer != cancelled);
+    /* A watch id is never a timer id, whatever the slot numbers. */
+    ASSERT_TRUE(maelys_sys_loop_timer_cancel(loop, (maelys_sys_timer_t)replacement) ==
+        MAELYS_SYS_ERR_NOT_FOUND);
+    ASSERT_TRUE(maelys_sys_loop_unwatch(loop, (maelys_sys_watch_t)timer) ==
+        MAELYS_SYS_ERR_NOT_FOUND);
+    ASSERT_TRUE(maelys_sys_loop_modify(loop, (maelys_sys_watch_t)timer,
+        MAELYS_SYS_INTEREST_READ) == MAELYS_SYS_ERR_NOT_FOUND);
     ASSERT_TRUE(step_until_event(loop, 202, MAELYS_SYS_EVENT_TIMER) == 0);
 
     uint64_t timer_base = 0;

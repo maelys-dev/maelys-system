@@ -92,8 +92,12 @@ peer half-close, and a wake that does not fit in the caller's array stays
 pending rather than being lost.
 
 `poll` is the reference backend. Linux selects `epoll`; macOS selects `kqueue`.
-The test suite runs every available backend against the same behavior and adds
-representative Egress relay and Orchestrator output-capture state machines.
+READ and WRITE follow the interests on every backend, and so does HUP for a
+watch that includes READ; for a watch on WRITE alone the hosts disagree and
+nothing is promised, and ERROR is an indication the following read or write
+confirms. The test suite runs every available backend against the same
+behavior and adds representative Egress relay and Orchestrator output-capture
+state machines.
 
 ## Documentation
 
