@@ -1,3 +1,6 @@
+/* pthread_getname_np on Linux. */
+#define _GNU_SOURCE
+
 #include "maelys/sys.h"
 
 #include <errno.h>
@@ -9,7 +12,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
+#include <pthread.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -590,6 +595,17 @@ static int test_threads_and_condition(void) {
     ASSERT_TRUE(maelys_sys_deadline_after(5, &deadline) == MAELYS_SYS_OK);
     ASSERT_TRUE(maelys_sys_condition_wait_until(
         context.condition, context.mutex, deadline) == MAELYS_SYS_ERR_TIMEOUT);
+    /* The deadline is on the monotonic clock: a timeout lasts what it says.
+     * With the wrong clock this returns after a millisecond. */
+    {
+        uint64_t before = 0, after = 0;
+        ASSERT_TRUE(maelys_sys_monotonic_ms(&before) == MAELYS_SYS_OK);
+        ASSERT_TRUE(maelys_sys_deadline_after(120, &deadline) == MAELYS_SYS_OK);
+        ASSERT_TRUE(maelys_sys_condition_wait_until(
+            context.condition, context.mutex, deadline) == MAELYS_SYS_ERR_TIMEOUT);
+        ASSERT_TRUE(maelys_sys_monotonic_ms(&after) == MAELYS_SYS_OK);
+        ASSERT_TRUE(after - before >= 100u);
+    }
     ASSERT_TRUE(maelys_sys_mutex_unlock(context.mutex) == MAELYS_SYS_OK);
     maelys_sys_condition_destroy(context.condition);
     maelys_sys_mutex_destroy(context.mutex);
@@ -767,10 +783,120 @@ static int exercise_loop_backend(maelys_sys_loop_backend_t backend) {
     ASSERT_TRUE(step == MAELYS_SYS_STEP_STOPPED && count == 0);
     ASSERT_TRUE(maelys_sys_thread_join(&thread, &thread_result) == MAELYS_SYS_OK);
     ASSERT_TRUE((uintptr_t)thread_result == MAELYS_SYS_OK);
+    /* stop is sticky: every later step reports it, without waiting. */
+    for (int again = 0; again < 3; ++again) {
+        ASSERT_TRUE(loop_deadline(1000, &deadline));
+        ASSERT_TRUE(maelys_sys_loop_step(
+            loop, deadline, &event, 1, &count, &step) == MAELYS_SYS_OK);
+        ASSERT_TRUE(step == MAELYS_SYS_STEP_STOPPED && count == 0);
+    }
     ASSERT_TRUE(maelys_sys_loop_stop(loop) == MAELYS_SYS_OK);
     ASSERT_TRUE(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
     ASSERT_TRUE(loop == NULL);
     ASSERT_TRUE(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
+    return 0;
+}
+
+static volatile sig_atomic_t alarms;
+
+static void alarm_handler(int signal_number) {
+    (void)signal_number;
+    ++alarms;
+}
+
+/* A signal every few milliseconds during a step: the wait is resumed with
+ * the remaining time, not reported as an error nor cut short. */
+static int test_loop_step_eintr(void) {
+    maelys_sys_loop_t *loop = NULL;
+    ASSERT_TRUE(maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) == MAELYS_SYS_OK);
+    struct sigaction action;
+    struct sigaction previous;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = alarm_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0; /* no SA_RESTART: the wait returns EINTR */
+    ASSERT_TRUE(sigaction(SIGALRM, &action, &previous) == 0);
+    struct itimerval interval = {
+        .it_interval = {.tv_sec = 0, .tv_usec = 5000},
+        .it_value = {.tv_sec = 0, .tv_usec = 5000}
+    };
+    ASSERT_TRUE(setitimer(ITIMER_REAL, &interval, NULL) == 0);
+    uint64_t before = 0, after = 0, deadline = 0;
+    ASSERT_TRUE(maelys_sys_monotonic_ms(&before) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_deadline_after(100, &deadline) == MAELYS_SYS_OK);
+    maelys_sys_event_t event;
+    size_t count = 0;
+    maelys_sys_step_result_t step = MAELYS_SYS_STEP_PROGRESS;
+    maelys_sys_result_t result = maelys_sys_loop_step(loop, deadline, &event, 1, &count, &step);
+    ASSERT_TRUE(maelys_sys_monotonic_ms(&after) == MAELYS_SYS_OK);
+    struct itimerval off = {{0, 0}, {0, 0}};
+    ASSERT_TRUE(setitimer(ITIMER_REAL, &off, NULL) == 0);
+    /* A signal TSan deferred may still be delivered: ignore it rather than
+     * hand it to the default action, which would end the process. */
+    action.sa_handler = SIG_IGN;
+    ASSERT_TRUE(sigaction(SIGALRM, &action, NULL) == 0);
+    (void)previous;
+    ASSERT_TRUE(result == MAELYS_SYS_OK);
+    ASSERT_TRUE(step == MAELYS_SYS_STEP_TIMEOUT && count == 0);
+    /* Under TSan handlers run late and fewer; one interruption is enough. */
+    ASSERT_TRUE(alarms >= 1);
+    ASSERT_TRUE(after - before >= 90u);
+    ASSERT_TRUE(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
+    return 0;
+}
+
+static char observed_thread_name[64];
+
+static void *name_reader(void *argument) {
+    (void)argument;
+    (void)pthread_getname_np(pthread_self(), observed_thread_name,
+        sizeof(observed_thread_name));
+    return NULL;
+}
+
+/* A name longer than the host limit is truncated, not dropped. */
+static int test_thread_name_limit(void) {
+    static const char long_name[] = "maelys-system-thread-name-longer-than-limits";
+    maelys_sys_thread_t *thread = NULL;
+    void *result = NULL;
+    memset(observed_thread_name, 0, sizeof(observed_thread_name));
+    ASSERT_TRUE(maelys_sys_thread_create(long_name, name_reader, NULL, &thread) ==
+        MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_thread_join(&thread, &result) == MAELYS_SYS_OK);
+#if defined(__linux__)
+    ASSERT_TRUE(strlen(observed_thread_name) == 15u);
+#else
+    ASSERT_TRUE(strlen(observed_thread_name) == strlen(long_name));
+#endif
+    ASSERT_TRUE(strncmp(observed_thread_name, long_name, strlen(observed_thread_name)) == 0);
+    return 0;
+}
+
+/*
+ * connect_complete before readiness: with no peer yet, ERR_STATE. This needs
+ * a connection that stays in progress, which only an unrouted address
+ * gives; where the network refuses it outright the case is skipped.
+ */
+static int test_socket_connect_early_complete(void) {
+    maelys_sys_socket_t *client = NULL;
+    struct sockaddr_in address;
+    maelys_sys_connect_state_t state;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(0x0AFFFF01u); /* 10.255.255.1, unrouted */
+    address.sin_port = htons(9);
+    ASSERT_TRUE(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) ==
+        MAELYS_SYS_OK);
+    maelys_sys_result_t started = maelys_sys_socket_connect_start(client,
+        (const struct sockaddr *)&address, (socklen_t)sizeof(address), &state);
+    if (started == MAELYS_SYS_OK && state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
+        errno = 0;
+        ASSERT_TRUE(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_ERR_STATE);
+        ASSERT_TRUE(errno == ENOTCONN);
+    } else {
+        printf("# connect early complete skipped: no route to a silent address\n");
+    }
+    ASSERT_TRUE(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
     return 0;
 }
 
@@ -804,7 +930,10 @@ int main(void) {
         test_socket_send_deadline,
         test_wakeup,
         test_threads_and_condition,
-        test_loop_backends
+        test_thread_name_limit,
+        test_socket_connect_early_complete,
+        test_loop_backends,
+        test_loop_step_eintr
     };
     const char *names[] = {
         "version and results",
@@ -818,7 +947,10 @@ int main(void) {
         "socket send deadline",
         "wakeup",
         "threads and condition",
-        "loop backends"
+        "thread name limit",
+        "socket connect early complete",
+        "loop backends",
+        "loop step under signals"
     };
     size_t count = sizeof(tests) / sizeof(tests[0]);
     for (size_t i = 0; i < count; ++i) {

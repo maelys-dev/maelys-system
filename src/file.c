@@ -40,9 +40,12 @@
  */
 #ifdef MAELYS_SYS_FILE_TESTING
 static int file_fault(const char *step);
+static int file_fault_at(const char *step, const char *path);
 #define FAULT(step) (file_fault(step) != 0)
+#define FAULT_AT(step, path) (file_fault_at(step, path) != 0)
 #else
 #define FAULT(step) 0
+#define FAULT_AT(step, path) 0
 #endif
 
 struct maelys_sys_file_lock {
@@ -248,7 +251,7 @@ maelys_sys_result_t maelys_sys_file_sync(int fd) {
 
 maelys_sys_result_t maelys_sys_directory_sync(const char *path) {
     if (!path) return MAELYS_SYS_ERR_ARGUMENT;
-    if (FAULT("open")) return MAELYS_SYS_ERR_OS;
+    if (FAULT_AT("open", path)) return MAELYS_SYS_ERR_OS;
     /* A directory is not a trusted object: a final symbolic link is
      * followed, as /tmp on macOS needs. */
     int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);

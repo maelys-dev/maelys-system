@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies eighteen one-line faults and requires the existing
-tests to reject every mutant. Nine target the reactor:
+directories, applies twenty-five one-line faults, two of them on Linux only, and
+requires the existing tests to reject every mutant. Nine target the reactor:
 
 - generation increment removed;
 - stale watch generation accepted;
@@ -34,6 +34,13 @@ Nine target the file primitives, each a fault a cold review of
 `tests/test_file_faults.c` compiles `src/file.c` with a fault point before
 each system call the contracts speak about; the mode and lock mutants are
 caught through actions taken at those points.
+
+Seven more come from a cold audit of 0.8.0, which found these contracts
+unobserved: EINTR reported by `step` and by `read_bounded` instead of
+being resumed; `stop` not sticky; `lock_release` keeping the lock; the
+parent sync of a publication aimed at the wrong directory; and, on Linux
+only, thread names not truncated to the host limit and conditions waiting
+on the wall clock instead of the monotonic one.
 
 The sweep is deterministic and has a 30-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the

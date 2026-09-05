@@ -25,6 +25,15 @@ static const char *fault_next;   /* armed with the same errno once fault_step fi
 static int fault_errno;
 static int fault_skip;
 static int (*fault_action)(void);
+/* The last path directory_sync was asked to open. */
+static char last_directory_opened[512];
+
+static int file_fault_at(const char *step, const char *path) {
+    if (strcmp(step, "open") == 0) {
+        (void)snprintf(last_directory_opened, sizeof(last_directory_opened), "%s", path);
+    }
+    return file_fault(step);
+}
 
 static int fault_next_errno;
 
@@ -191,6 +200,13 @@ static int publish_failures(void) {
     CHECK(result == MAELYS_SYS_ERR_OS && errno == EIO);
     CHECK(lstat(destination, &status) == 0 && absent(staging));
     CHECK(unlink(destination) == 0);
+    /* The parent that gets synced is the destination's directory, not the
+     * working directory nor the destination itself. */
+    CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
+    last_directory_opened[0] = '\0';
+    CHECK(maelys_sys_file_publish_noreplace(staging, destination, &options) == MAELYS_SYS_OK);
+    CHECK(strcmp(last_directory_opened, work) == 0);
+    CHECK(unlink(destination) == 0);
     /* lstat of the staging fails as an OS error, not "not found". */
     CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
     arm("lstat", EACCES, 0);
@@ -266,6 +282,15 @@ static int lock_failures(void) {
     /* After every failure the lock is free. */
     CHECK(maelys_sys_file_lock_acquire(lock_path, &nowait, &lock) == MAELYS_SYS_OK);
     CHECK(maelys_sys_file_lock_release(&lock) == MAELYS_SYS_OK);
+    /* release unlocks even when a dup of the descriptor keeps the open
+     * file description alive: the next holder does not wait on the dup. */
+    CHECK(maelys_sys_file_lock_acquire(lock_path, &nowait, &lock) == MAELYS_SYS_OK);
+    int kept = dup(maelys_sys_file_lock_fd(lock));
+    CHECK(kept >= 0);
+    CHECK(maelys_sys_file_lock_release(&lock) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_lock_acquire(lock_path, &nowait, &lock) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_file_lock_release(&lock) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_fd_close(&kept) == MAELYS_SYS_OK);
     CHECK(lstat(lock_path, &status) == 0);
     CHECK(unlink(lock_path) == 0);
     return 0;
@@ -289,6 +314,10 @@ static int read_and_open_failures(void) {
     arm("read", EIO, 0);
     CHECK(maelys_sys_file_read_bounded(fd, buffer, 4u, &size) == MAELYS_SYS_ERR_OS);
     CHECK(size == 0u);
+    /* An interrupted read is retried, not reported. */
+    arm("read", EINTR, 0);
+    CHECK(maelys_sys_file_read_bounded(fd, buffer, 4u, &size) == MAELYS_SYS_OK);
+    CHECK(size == 4u && memcmp(buffer, "abcd", 4u) == 0);
     CHECK(maelys_sys_fd_close(&fd) == MAELYS_SYS_OK);
     arm("open", EIO, 0);
     CHECK(maelys_sys_directory_sync(work) == MAELYS_SYS_ERR_OS);
