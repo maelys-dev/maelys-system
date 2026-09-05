@@ -3,9 +3,9 @@
 The 0.x release train is source compatible within ABI 1. A release requires:
 
 1. `VERSION`, `MAELYS_SYS_VERSION` and the changelog agree.
-2. `make check`, `make asan-ubsan`, `make tsan`, `make analyze` and
-   `make install-check` pass.
-3. `make mutation-check` kills every listed reactor mutant.
+2. `make release-check` passes: `check`, `analyze`, `mutation-check`,
+   `asan-ubsan`, `tsan` and `install-check` in one run.
+3. Every listed mutant, reactor and file primitives alike, is killed.
 4. Native Linux amd64/arm64 and macOS 15/26 Apple Silicon jobs pass.
 5. Native package jobs validate macOS arm64 and Linux amd64/arm64 tarballs,
    Linux `.deb`/`.rpm` archives and the rendered Homebrew formula.

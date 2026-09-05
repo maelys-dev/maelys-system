@@ -23,6 +23,12 @@
 - `deadline_after` can no longer return the INFINITE sentinel as a
   deadline; `connect_start` writes `*out_state` on success only; the
   SIGPIPE status of a detached descriptor on Linux is documented.
+- Gates: the mutation script builds each mutant without a time limit and
+  bounds only the tests, and says whether a kill came from the tests, the
+  compiler or a hang; macOS runs the mutants, ASan/UBSan, TSan and the
+  analyzer in CI as Linux did; `make release-check` runs every gate
+  RELEASING.md requires; `WERROR=` lets a packaged build survive a newer
+  compiler's warnings while the checks keep `-Werror`.
 - Adopt maelys-release 0.6.1: the managed files are regenerated, and
   `.github/workflows/ci.yml` calls the socle's `check-product.yml`, which
   reads `adapter/` itself and checks the drift of the managed files from

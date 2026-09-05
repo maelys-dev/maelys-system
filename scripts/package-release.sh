@@ -33,7 +33,7 @@ work=$(mktemp -d "$temp_base/maelys-system-package.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p dist
 stage="$work/stage"
-make clean check
+make clean check WERROR=
 make install DESTDIR="$stage" PREFIX=/usr/local
 tar_name="maelys-system-$version-$target.tar.gz"
 tar -czf "dist/$tar_name" -C "$stage" .

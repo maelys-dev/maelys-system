@@ -13,8 +13,8 @@ class LibmaelysSys < Formula
   conflicts_with "maelys-warden", because: "both install libmaelys_sys and the Maelys System headers"
 
   def install
-    system "make", "CC=#{ENV.cc}", "CXX=#{ENV.cxx}", "check"
-    system "make", "CC=#{ENV.cc}", "CXX=#{ENV.cxx}", "PREFIX=#{prefix}", "install"
+    system "make", "CC=#{ENV.cc}", "CXX=#{ENV.cxx}", "WERROR=", "check"
+    system "make", "CC=#{ENV.cc}", "CXX=#{ENV.cxx}", "WERROR=", "PREFIX=#{prefix}", "install"
   end
 
   test do
