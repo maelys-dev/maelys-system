@@ -112,7 +112,6 @@ maelys_sys_result_t maelys_sys_socket_connect_start(
     socklen_t address_length,
     maelys_sys_connect_state_t *out_state) {
     int status;
-    if (out_state) *out_state = MAELYS_SYS_CONNECT_IN_PROGRESS;
     if (!socket_handle || socket_handle->fd < 0 || !address ||
         address_length == 0 || !out_state) {
         return MAELYS_SYS_ERR_ARGUMENT;

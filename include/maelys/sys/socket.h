@@ -42,8 +42,8 @@ int maelys_sys_socket_native_fd(const maelys_sys_socket_t *socket_handle);
  * connect(2) fails with EAGAIN or EWOULDBLOCK (Linux AF_UNIX with a full
  * backlog) nothing was started: the handle stays fresh and a later start is
  * allowed. connect_complete called before readiness, while no peer exists
- * yet, is ERR_STATE and may be retried after readiness. No address retry is
- * attempted.
+ * yet, is ERR_STATE and may be retried after readiness. *out_state is
+ * written on OK only. No address retry is attempted.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_start(
     maelys_sys_socket_t *socket_handle,
@@ -129,7 +129,10 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_release(
  * Gives the descriptor to the caller and frees the handle without closing
  * anything; *socket_handle becomes NULL and the caller owns *out_fd. The
  * descriptor keeps close-on-exec and non-blocking mode; a caller that needs
- * a blocking descriptor calls maelys_sys_fd_set_blocking. A connection
+ * a blocking descriptor calls maelys_sys_fd_set_blocking. SIGPIPE
+ * protection stays with the descriptor on macOS (SO_NOSIGPIPE) but not on
+ * Linux, where it was per call (MSG_NOSIGNAL): a detached descriptor
+ * written with write(2) can raise SIGPIPE there. A connection
  * started and not yet completed is refused with ERR_STATE, and the handle
  * is left intact: finishing it is connect_complete's job, not the caller's.
  * A handle whose connection failed may be detached. NULL and an already-NULL

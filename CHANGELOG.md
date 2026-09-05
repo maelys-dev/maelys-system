@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Reactor: a watch id and a timer id can no longer collide (a kind bit in
+  the id, 31-bit generations); cancelling a timer with a watch id or
+  unwatching with a timer id is `ERR_NOT_FOUND`.
+- Reactor: `unwatch` releases the registration of a descriptor closed
+  before it (a contract fault the backends answered three different ways)
+  and reports OK; loop.h says what a surviving dup does on epoll.
+- Reactor: the loop asks the backend for exactly the caller's capacity,
+  since the kernel rotates its ready list on what was reported, and the
+  poll backend reports from a rotating cursor: a caller array smaller than
+  the ready set no longer starves the watches beyond it, on any backend.
+  The wakeup rotates in like any descriptor and is consumed only once
+  reported, which makes the "wake consumed when full" guard, and its
+  mutant, dead code.
+- Reactor: the contract of HUP and ERROR is written as the hosts allow
+  (HUP promised with READ only, ERROR an indication); kqueue reports ERROR
+  on a reset like epoll does. Regular files are named as not watchable.
+- `directory_sync` follows a final symbolic link, as the parent sync of a
+  publication already did; `sync_parent` now calls it.
+- `deadline_after` can no longer return the INFINITE sentinel as a
+  deadline; `connect_start` writes `*out_state` on success only; the
+  SIGPIPE status of a detached descriptor on Linux is documented.
 - Adopt maelys-release 0.6.1: the managed files are regenerated, and
   `.github/workflows/ci.yml` calls the socle's `check-product.yml`, which
   reads `adapter/` itself and checks the drift of the managed files from

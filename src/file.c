@@ -249,7 +249,9 @@ maelys_sys_result_t maelys_sys_file_sync(int fd) {
 maelys_sys_result_t maelys_sys_directory_sync(const char *path) {
     if (!path) return MAELYS_SYS_ERR_ARGUMENT;
     if (FAULT("open")) return MAELYS_SYS_ERR_OS;
-    int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    /* A directory is not a trusted object: a final symbolic link is
+     * followed, as /tmp on macOS needs. */
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
     maelys_sys_result_t result = sync_descriptor(fd);
     int saved = errno;
@@ -405,16 +407,7 @@ static maelys_sys_result_t sync_parent_of(const char *destination) {
         memcpy(parent, destination, length);
     }
     parent[length] = '\0';
-    if (FAULT("open")) return MAELYS_SYS_ERR_OS;
-    int fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (fd < 0) return MAELYS_SYS_ERR_OS;
-    maelys_sys_result_t result = sync_descriptor(fd);
-    int saved = errno;
-    if (maelys_sys_fd_close(&fd) != MAELYS_SYS_OK && result == MAELYS_SYS_OK) {
-        return MAELYS_SYS_ERR_OS;
-    }
-    errno = saved;
-    return result;
+    return maelys_sys_directory_sync(parent);
 }
 
 static maelys_sys_result_t publish(

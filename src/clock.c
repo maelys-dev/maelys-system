@@ -37,7 +37,8 @@ maelys_sys_result_t maelys_sys_deadline_after(
     uint64_t now = 0;
     maelys_sys_result_t result = maelys_sys_monotonic_ms(&now);
     if (result != MAELYS_SYS_OK) return result;
-    if (timeout_ms > UINT64_MAX - now) {
+    /* The sentinel itself is not a deadline: the sum must stay below it. */
+    if (timeout_ms >= UINT64_MAX - now) {
         errno = EOVERFLOW;
         return MAELYS_SYS_ERR_OS;
     }

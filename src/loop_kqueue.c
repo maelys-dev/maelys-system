@@ -167,7 +167,12 @@ static maelys_sys_result_t kqueue_wait_backend(
         unsigned flags = 0;
         if (context->events[i].filter == EVFILT_READ) flags |= MAELYS_SYS_EVENT_READ;
         if (context->events[i].filter == EVFILT_WRITE) flags |= MAELYS_SYS_EVENT_WRITE;
-        if (context->events[i].flags & EV_EOF) flags |= MAELYS_SYS_EVENT_HUP;
+        if (context->events[i].flags & EV_EOF) {
+            flags |= MAELYS_SYS_EVENT_HUP;
+            /* On a socket, fflags carries the error that ended it (a reset):
+             * report it as epoll's EPOLLERR does. */
+            if (context->events[i].fflags != 0) flags |= MAELYS_SYS_EVENT_ERROR;
+        }
         if (context->events[i].flags & EV_ERROR) flags |= MAELYS_SYS_EVENT_ERROR;
         events[(size_t)i] = (maelys_sys_backend_event_t){
             .watch_id = (uint64_t)(uintptr_t)context->events[i].udata,
