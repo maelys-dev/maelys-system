@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Adopt maelys-release 0.14.2 (from 0.6.1): the declarations move from
+  `adapter/` to `dependencies/` (`dependencies/packages`; a consumer's pin
+  on this library is `dependencies/maelys-system.pin`), the managed texts
+  no longer carry the socle version, the attestation follows the
+  repository's visibility, and `check`, `preflight` and `rehearse` answer
+  as the socle the product pins wherever they are started from.
+  `rehearse DIR TARGET --check` replays `make check` on the Linux target.
+
 ## 0.9.0 - 2026-09-05
 
 - Two result codes appended, ABI 1 preserved, from the review by

@@ -6,7 +6,8 @@ description: Release a Maelys product through the shared maelys-release socle, o
 # Releasing a Maelys product
 
 The product is `maelys-system`; its release mechanics come from maelys-release
-v0.6.1 (`docs/conventions.md` there is normative).
+at the version `.github/workflows/release.yml` pins (`docs/conventions.md`
+there is normative).
 
 ## Cut a release
 
@@ -16,7 +17,8 @@ v0.6.1 (`docs/conventions.md` there is normative).
    that will be tagged.
 2. Merge through a pull request with green CI.
 3. Run `bin/maelys-release preflight .` from a maelys-release checkout at
-   v0.6.1; it exits 2 on anything the workflow would refuse (signing
+   (any version: it runs as the pinned one); it exits 2 on anything the
+   workflow would refuse (signing
    configuration, previous tag, existing `vX.Y.Z`, `release` environment
    not limited to tags `v*`).
 4. Tag the merge commit: `git tag -s vX.Y.Z -m "maelys-system X.Y.Z"`, then
@@ -24,7 +26,10 @@ v0.6.1 (`docs/conventions.md` there is normative).
    registered on GitHub; the workflow refuses anything else.
 5. Watch the `release` workflow; the `publish` job runs in the `release`
    environment. Verify with `gh release view vX.Y.Z` and
-   `gh attestation verify <asset> --repo <owner>/<repo>`.
+   `gh attestation verify <asset> --repo <owner>/<repo> --signer-repo maelys-dev/maelys-release`
+   (the attestation is signed by the socle's reusable workflow, so `gh` must
+   be told that signer; without it verification fails with "verifying with
+   issuer sigstore.dev").
 
 ## Before the first tag, or after changing packaging
 
@@ -36,16 +41,16 @@ the first Linux build of the product.
 ## Change release or packaging files
 
 - `.github/workflows/release.yml` and `scripts/checkout-dependency.sh`:
-  never by hand. They are generated from `adapter/*_PIN`, `adapter/PACKAGES`
+  never by hand. They are generated from `dependencies/*.pin`, `dependencies/packages`
   and `packaging/homebrew/*.rb.in`; change those, then run
   `bin/maelys-release adopt DIR --apply` from a maelys-release checkout at
   the target tag; check drift with `bin/maelys-release check DIR`. Every
   command answers `--format json` with an agent-cli/v2 envelope and
   `describe --format json` returns the catalog.
-- `adapter/<NAME>_PIN`: nearest tag on line 1, pinned commit on line 2.
+- `dependencies/<name>.pin`: nearest tag on line 1, pinned commit on line 2.
   `scripts/checkout-dependency.sh NAME` clones the dependency at that
   commit; write no other checkout script.
-- `adapter/PACKAGES`: the apt (`[linux]`) and brew (`[macos]`) packages the
+- `dependencies/packages`: the apt (`[linux]`) and brew (`[macos]`) packages the
   build needs, one per line. Nothing else installs packages in a release
   or in CI: `.github/workflows/ci.yml` calls the socle's
   `check-product.yml`, which reads the declarations itself; keep that job,
@@ -68,7 +73,7 @@ the first Linux build of the product.
 - edit a generated file by hand: `release.yml`, `checkout-dependency.sh`,
   anything under `docs/generated/`;
 - install packages from a checkout script or from `package-release.sh`;
-  declare them in `adapter/PACKAGES`;
+  declare them in `dependencies/packages`;
 - put credentials in the repository; the tap secrets are
   `HOMEBREW_TAP_TOKEN` and `HOMEBREW_TAP_SIGNING_KEY`;
 - run release jobs on a self-hosted runner from a public repository.

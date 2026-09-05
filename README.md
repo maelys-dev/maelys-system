@@ -86,7 +86,7 @@ the optional umbrella header `maelys/sys.h`.
   `ERR_EXISTS`, `ERR_IDENTITY`.
 - A consumer checks `MAELYS_SYS_ABI_VERSION == 1` when it compiles and
   `maelys_sys_abi_version()` when it runs; the version string is information,
-  never a pin. The pin is the commit in its `adapter/MAELYS_SYSTEM_PIN`, and
+  never a pin. The pin is the commit in its `dependencies/maelys-system.pin`, and
   the public history of this repository is not rewritten: the restart of
   2026-09-03 at the 0.5.1 tree was the last, and invalidated every commit pin
   taken before it.
