@@ -116,10 +116,8 @@ static int test_socket_lifecycle(void) {
     ASSERT_TRUE(maelys_sys_socket_listen(listener, 4) == MAELYS_SYS_OK);
     ASSERT_TRUE(getsockname(listener_fd, (struct sockaddr *)&address,
         &address_length) == 0);
-    errno = 0;
     ASSERT_TRUE(maelys_sys_socket_accept(
-        listener, NULL, NULL, &accepted) == MAELYS_SYS_ERR_OS);
-    ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+        listener, NULL, NULL, &accepted) == MAELYS_SYS_ERR_WOULD_BLOCK);
     ASSERT_TRUE(accepted == NULL);
 
     ASSERT_TRUE(maelys_sys_socket_create(
@@ -338,8 +336,7 @@ static int test_socket_unix_backlog(void) {
         result = maelys_sys_socket_connect_start(clients[i],
             (const struct sockaddr *)&address, (socklen_t)sizeof(address),
             &state);
-        if (result == MAELYS_SYS_ERR_OS) {
-            ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+        if (result == MAELYS_SYS_ERR_WOULD_BLOCK) {
             /* Nothing started: the handle is fresh, a new start is legal. */
             ASSERT_TRUE(maelys_sys_socket_connect_complete(clients[i]) ==
                 MAELYS_SYS_ERR_STATE);
@@ -397,6 +394,50 @@ static int test_clock_and_deadlines(void) {
     ASSERT_TRUE(maelys_sys_deadline_expired(
         MAELYS_SYS_DEADLINE_INFINITE, &expired) == MAELYS_SYS_OK);
     ASSERT_TRUE(!expired);
+    return 0;
+}
+
+/* One descriptor, one deadline: the wait a consumer needs without a loop. */
+static int test_fd_wait(void) {
+    int sockets[2] = {-1, -1};
+    unsigned flags = 0;
+    uint64_t deadline = 0, before = 0, after = 0;
+    ASSERT_TRUE(maelys_sys_socketpair_cloexec(SOCK_STREAM, sockets) == MAELYS_SYS_OK);
+    /* Writable at once, even with an infinite deadline. */
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0], MAELYS_SYS_INTEREST_WRITE,
+        MAELYS_SYS_DEADLINE_INFINITE, &flags) == MAELYS_SYS_OK);
+    ASSERT_TRUE(flags & MAELYS_SYS_EVENT_WRITE);
+    /* Nothing to read: the deadline passes, fully. */
+    ASSERT_TRUE(maelys_sys_monotonic_ms(&before) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_deadline_after(60, &deadline) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0], MAELYS_SYS_INTEREST_READ,
+        deadline, &flags) == MAELYS_SYS_ERR_TIMEOUT);
+    ASSERT_TRUE(maelys_sys_monotonic_ms(&after) == MAELYS_SYS_OK);
+    ASSERT_TRUE(after - before >= 50u && flags == 0);
+    /* A byte arrives: READ, and both interests report both. */
+    ASSERT_TRUE(write(sockets[1], "x", 1) == 1);
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0],
+        MAELYS_SYS_INTEREST_READ | MAELYS_SYS_INTEREST_WRITE, deadline, &flags) ==
+        MAELYS_SYS_OK);
+    ASSERT_TRUE((flags & (MAELYS_SYS_EVENT_READ | MAELYS_SYS_EVENT_WRITE)) ==
+        (MAELYS_SYS_EVENT_READ | MAELYS_SYS_EVENT_WRITE));
+    /* The peer closes: READ with the byte still to read, HUP with it. */
+    ASSERT_TRUE(maelys_sys_fd_close(&sockets[1]) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0], MAELYS_SYS_INTEREST_READ,
+        MAELYS_SYS_DEADLINE_INFINITE, &flags) == MAELYS_SYS_OK);
+    ASSERT_TRUE(flags & MAELYS_SYS_EVENT_READ);
+    ASSERT_TRUE(maelys_sys_fd_wait(-1, MAELYS_SYS_INTEREST_READ, deadline, &flags) ==
+        MAELYS_SYS_ERR_ARGUMENT);
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0], 0u, deadline, &flags) ==
+        MAELYS_SYS_ERR_ARGUMENT);
+    ASSERT_TRUE(maelys_sys_fd_wait(sockets[0], MAELYS_SYS_INTEREST_READ, deadline,
+        NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    int closed = sockets[0];
+    ASSERT_TRUE(maelys_sys_fd_close(&sockets[0]) == MAELYS_SYS_OK);
+    errno = 0;
+    ASSERT_TRUE(maelys_sys_fd_wait(closed, MAELYS_SYS_INTEREST_READ, deadline,
+        &flags) == MAELYS_SYS_ERR_ARGUMENT);
+    ASSERT_TRUE(errno == EBADF);
     return 0;
 }
 
@@ -485,8 +526,7 @@ static int test_socket_send_deadline(void) {
             ASSERT_TRUE(written > 0);
             continue;
         }
-        ASSERT_TRUE(result == MAELYS_SYS_ERR_OS);
-        ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+        ASSERT_TRUE(result == MAELYS_SYS_ERR_WOULD_BLOCK);
         break;
     }
     uint64_t deadline = 0;
@@ -588,6 +628,20 @@ static int test_threads_and_condition(void) {
     void *result = NULL;
     ASSERT_TRUE(maelys_sys_thread_join(&thread, &result) == MAELYS_SYS_OK);
     ASSERT_TRUE((uintptr_t)result == 42);
+
+    /* Without a deadline: the worker's signal is the only way out. */
+    context.ready = 0;
+    ASSERT_TRUE(maelys_sys_mutex_lock(context.mutex) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_thread_create(
+        "condition-wait", condition_worker, &context, &thread) == MAELYS_SYS_OK);
+    while (!context.ready) {
+        ASSERT_TRUE(maelys_sys_condition_wait(context.condition, context.mutex) ==
+            MAELYS_SYS_OK);
+    }
+    ASSERT_TRUE(maelys_sys_mutex_unlock(context.mutex) == MAELYS_SYS_OK);
+    ASSERT_TRUE(maelys_sys_thread_join(&thread, &result) == MAELYS_SYS_OK);
+    ASSERT_TRUE((uintptr_t)result == 42);
+    ASSERT_TRUE(maelys_sys_condition_wait(NULL, context.mutex) == MAELYS_SYS_ERR_ARGUMENT);
 
     ASSERT_TRUE(maelys_sys_mutex_lock(context.mutex) == MAELYS_SYS_OK);
     ASSERT_TRUE(maelys_sys_condition_wait_until(context.condition, context.mutex,
@@ -923,6 +977,7 @@ int main(void) {
         test_version_and_results,
         test_clock_and_deadlines,
         test_fd_contracts,
+        test_fd_wait,
         test_socket_lifecycle,
         test_socket_connect_refused,
         test_socket_detach,
@@ -940,6 +995,7 @@ int main(void) {
         "version and results",
         "clock and deadlines",
         "fd contracts",
+        "fd wait",
         "socket lifecycle",
         "socket connect refused",
         "socket detach",

@@ -14,6 +14,10 @@ The 0.x release train is source compatible within ABI 1. A release requires:
    its `adopt.sh`) publishes the native packages, checksums, provenance
    attestations and the `libmaelys-sys` Homebrew formula with its bottles.
 
+The public history is never rewritten: a commit pin taken by a consumer
+must stay valid. The restart of 2026-09-03 at the 0.5.1 tree, which moved
+the MIT-licensed history to a private archive, was the last such event.
+
 No release gate may be marked optional. QEMU or cross-compilation is useful
 packaging evidence but is not a replacement for native reactor tests.
 Benchmark jobs are informational. A noisy timing result never blocks or

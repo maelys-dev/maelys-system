@@ -137,7 +137,7 @@ maelys_sys_result_t maelys_sys_socket_connect_start(
         /* Nothing was started (Linux AF_UNIX with a full backlog): there is
          * no completion to wait for, and the handle stays fresh so the
          * caller may start again later. */
-        return MAELYS_SYS_ERR_OS;
+        return MAELYS_SYS_ERR_WOULD_BLOCK;
     }
     socket_handle->connect_started = 1;
     socket_handle->connect_error = errno;
@@ -198,9 +198,9 @@ maelys_sys_result_t maelys_sys_socket_receive(
         *out_received = (size_t)received;
         return MAELYS_SYS_OK;
     }
-    if (received == 0 || errno == ECONNRESET || errno == ENOTCONN) {
-        return MAELYS_SYS_ERR_CLOSED;
-    }
+    if (received == 0 || errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
+    if (errno == ECONNRESET) return MAELYS_SYS_ERR_RESET;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
     return MAELYS_SYS_ERR_OS;
 }
 
@@ -283,6 +283,12 @@ maelys_sys_result_t maelys_sys_socket_listen(
         MAELYS_SYS_OK : MAELYS_SYS_ERR_OS;
 }
 
+/* No pending connection on a non-blocking listener is the normal case. */
+static maelys_sys_result_t accept_failure(void) {
+    return errno == EAGAIN || errno == EWOULDBLOCK ?
+        MAELYS_SYS_ERR_WOULD_BLOCK : MAELYS_SYS_ERR_OS;
+}
+
 maelys_sys_result_t maelys_sys_socket_accept(
     maelys_sys_socket_t *listener,
     struct sockaddr *address,
@@ -303,13 +309,13 @@ maelys_sys_result_t maelys_sys_socket_accept(
                      SOCK_NONBLOCK | SOCK_CLOEXEC);
     } while (fd < 0 && errno == EINTR);
     if (fd >= 0) atomic_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
-    else if (errno != ENOSYS && errno != EINVAL) return MAELYS_SYS_ERR_OS;
+    else if (errno != ENOSYS && errno != EINVAL) return accept_failure();
 #endif
     if (fd < 0) {
         do {
             fd = accept(listener->fd, address, address_length);
         } while (fd < 0 && errno == EINTR);
-        if (fd < 0) return MAELYS_SYS_ERR_OS;
+        if (fd < 0) return accept_failure();
     }
     result = wrap_socket(fd, atomic_flags != 0, out_socket);
     if (result == MAELYS_SYS_OK) return result;

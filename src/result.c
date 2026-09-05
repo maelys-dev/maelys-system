@@ -24,6 +24,8 @@ const char *maelys_sys_result_string(maelys_sys_result_t result) {
         case MAELYS_SYS_ERR_EXISTS: return "already exists";
         case MAELYS_SYS_ERR_BUSY: return "busy";
         case MAELYS_SYS_ERR_IDENTITY: return "unexpected file identity";
+        case MAELYS_SYS_ERR_RESET: return "connection reset";
+        case MAELYS_SYS_ERR_WOULD_BLOCK: return "would block";
     }
     return "unknown result";
 }
