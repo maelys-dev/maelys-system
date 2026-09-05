@@ -6,6 +6,9 @@ temp_base=$(printenv TMPDIR || printf '%s' /tmp)
 work=$(mktemp -d "$temp_base/maelys-system-mutations.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
+killed=0
+host=$(uname -s)
+
 # run_mutant NAME FILE OLD NEW: copies the tree, replaces the first OLD by
 # NEW in FILE and requires the tests to fail.
 run_mutant() {
@@ -34,6 +37,12 @@ PY
         return 1
     fi
     printf '%s\n' "mutation killed: $name"
+    killed=$((killed + 1))
+}
+
+# A fault only the Linux branch of the code can carry.
+run_mutant_linux() {
+    if test "$host" = Linux; then run_mutant "$@"; else printf '%s\n' "mutation skipped on $host: $1"; fi
 }
 
 run_mutant stale-generation-increment src/loop.c \
@@ -86,4 +95,23 @@ run_mutant exclusive-file-created-readable src/file.c \
 run_mutant removal-ignores-identity src/file.c \
     'now.st_dev != identity->device || now.st_ino != identity->inode ||' '0 ||'
 
-printf '%s\n' "mutation check: 18/18 killed"
+# Contracts a cold audit of 0.8.0 found unobserved by the suite.
+run_mutant step-eintr-reported src/loop.c \
+    'if (result == MAELYS_SYS_ERR_OS && errno == EINTR) continue;' 'if (0) continue;'
+run_mutant stop-not-sticky src/loop.c \
+    'if (atomic_load_explicit(&loop->stopped, memory_order_acquire)) {' 'if (0) {'
+run_mutant bounded-read-eintr-reported src/file.c \
+    '            if (errno == EINTR) continue;
+            return MAELYS_SYS_ERR_OS;' \
+    '            if (0) continue;
+            return MAELYS_SYS_ERR_OS;'
+run_mutant lock-release-keeps-lock src/file.c \
+    'if (flock(owned->fd, LOCK_UN) != 0) result = MAELYS_SYS_ERR_OS;' '(void)0;'
+run_mutant parent-sync-wrong-directory src/file.c \
+    'return maelys_sys_directory_sync(parent);' 'return maelys_sys_directory_sync(".");'
+run_mutant_linux thread-name-not-truncated src/thread.c \
+    '#define THREAD_NAME_LIMIT 15u' '#define THREAD_NAME_LIMIT 63u'
+run_mutant_linux condition-wall-clock src/thread.c \
+    'status = pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);' 'status = 0;'
+
+printf '%s\n' "mutation check: $killed/$killed killed"
