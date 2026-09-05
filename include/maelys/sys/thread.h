@@ -33,6 +33,15 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_wait_until(
     maelys_sys_condition_t *condition,
     maelys_sys_mutex_t *mutex,
     uint64_t deadline_ms);
+/*
+ * Waits without a deadline: for a worker that has nothing to do until it
+ * is told. Same mutex and spurious-wakeup rules as wait_until; the only
+ * way out is a signal or a broadcast, so a caller that must also stop on
+ * time uses wait_until.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_wait(
+    maelys_sys_condition_t *condition,
+    maelys_sys_mutex_t *mutex);
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_signal(
     maelys_sys_condition_t *condition);
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_broadcast(

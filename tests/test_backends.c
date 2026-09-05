@@ -77,6 +77,50 @@ static int peer_half_close(maelys_sys_loop_backend_t backend) {
     return 0;
 }
 
+/* A non-blocking receive with nothing to read is ERR_WOULD_BLOCK. */
+static int receive_would_block(maelys_sys_loop_backend_t backend) {
+    (void)backend;
+    maelys_sys_socket_t *listener = NULL;
+    struct sockaddr_in address;
+    socklen_t length = (socklen_t)sizeof(address);
+    CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &listener) ==
+        MAELYS_SYS_OK);
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    CHECK(maelys_sys_socket_bind(listener, (const struct sockaddr *)&address,
+        length) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_listen(listener, 1) == MAELYS_SYS_OK);
+    CHECK(getsockname(maelys_sys_socket_native_fd(listener),
+        (struct sockaddr *)&address, &length) == 0);
+    maelys_sys_socket_t *client = NULL;
+    maelys_sys_socket_t *accepted = NULL;
+    maelys_sys_connect_state_t state;
+    unsigned flags = 0;
+    uint64_t deadline = 0;
+    CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) ==
+        MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_connect_start(client, (const struct sockaddr *)&address,
+        length, &state) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(listener),
+        MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_accept(listener, NULL, NULL, &accepted) == MAELYS_SYS_OK);
+    if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
+        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(client),
+            MAELYS_SYS_INTEREST_WRITE, deadline, &flags) == MAELYS_SYS_OK);
+    }
+    CHECK(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_OK);
+    char byte = 0;
+    size_t got = 0;
+    CHECK(maelys_sys_socket_receive(accepted, &byte, 1u, &got) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    CHECK(got == 0u);
+    CHECK(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_release(&accepted) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
+    return 0;
+}
+
 /* READ|WRITE interest, both ready: one event carrying both flags. */
 static int merged_directions(maelys_sys_loop_backend_t backend) {
     fixture_t fixture;
@@ -265,6 +309,12 @@ static int hup_and_error_by_host(maelys_sys_loop_backend_t backend) {
     CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 1 && events[0].token == 3);
     CHECK(events[0].flags & MAELYS_SYS_EVENT_READ);
     CHECK(events[0].flags & MAELYS_SYS_EVENT_HUP);
+    /* Reading the reset socket is ERR_RESET, never the clean end of stream. */
+    {
+        char byte = 0;
+        size_t got = 0;
+        CHECK(maelys_sys_socket_receive(accepted, &byte, 1u, &got) == MAELYS_SYS_ERR_RESET);
+    }
 #if defined(__linux__)
     CHECK(events[0].flags & MAELYS_SYS_EVENT_ERROR);
 #else
@@ -289,6 +339,7 @@ static int run_backend(maelys_sys_loop_backend_t backend, const char *label) {
     CHECK(closed_before_unwatch(backend) == 0);
     CHECK(fairness(backend) == 0);
     CHECK(hup_and_error_by_host(backend) == 0);
+    CHECK(receive_would_block(backend) == 0);
     printf("ok - %s backend parity\n", label);
     return 0;
 }

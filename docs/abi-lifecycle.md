@@ -19,6 +19,14 @@ An incompatible public-header or observable-contract change requires all of:
 4. rebuilds of every pinned Maelys consumer; and
 5. parallel install naming if two ABIs must coexist.
 
+Public structures the library reads (`maelys_sys_socket_bind_options_t`,
+`maelys_sys_publish_options_t`, `maelys_sys_file_lock_options_t`,
+`maelys_sys_file_expectations_t`, `maelys_sys_file_identity_t`) keep their
+fields within ABI 1: a new option is a new structure and a new function,
+never a field added to an existing one. A consumer compiled against an
+older header therefore never passes a shorter object. Result codes are
+appended, never reordered.
+
 Private structure layout, backend implementation and test-only code are not
 ABI. Native descriptor integers are part of the explicitly POSIX contract.
 

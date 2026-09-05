@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 - 2026-09-05
+
+- Two result codes appended, ABI 1 preserved, from the review by
+  maelys-http: `ERR_RESET` for a peer's reset (`ECONNRESET`) on receive and
+  send, which was reported as `ERR_CLOSED` and let a body delimited by the
+  close pass as complete; `ERR_WOULD_BLOCK` for the normal state of a
+  non-blocking socket on receive, send, accept and a Unix connect that could
+  not start, which was `ERR_OS` with `EAGAIN`. Consumers that mapped
+  `ERR_CLOSED` to end of stream or tested `errno == EAGAIN` change behavior:
+  that is the point.
+- `maelys_sys_fd_wait`: one `poll(2)` on one descriptor with an absolute
+  deadline, for a consumer that needs no loop; `send_all_until` uses it.
+- `maelys_sys_condition_wait`: a wait without deadline, for a worker with
+  nothing to do until told.
+- The wakeup is an `eventfd` on Linux: one descriptor, no lock; the pipe
+  stays on macOS.
+- SIGPIPE is suppressed per call with `MSG_NOSIGNAL` on both hosts; the
+  per-call `SO_NOSIGPIPE` fallback was dead code and its comment misleading.
+- Rules written down: public structures the library reads keep their fields
+  within ABI 1 (a new option is a new structure and function); consumers
+  check `MAELYS_SYS_ABI_VERSION` and `maelys_sys_abi_version()`, not the
+  version string; the public history is never rewritten again, the restart
+  of 2026-09-03 having invalidated every earlier commit pin.
+
 ## 0.8.1 - 2026-09-05
 
 - Reactor: a watch id and a timer id can no longer collide (a kind bit in

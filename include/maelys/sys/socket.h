@@ -40,8 +40,8 @@ int maelys_sys_socket_native_fd(const maelys_sys_socket_t *socket_handle);
  * requires the caller to wait for write/error readiness and then call
  * connect_complete. On ERR_OS, errno identifies connect(2) or SO_ERROR. When
  * connect(2) fails with EAGAIN or EWOULDBLOCK (Linux AF_UNIX with a full
- * backlog) nothing was started: the handle stays fresh and a later start is
- * allowed. connect_complete called before readiness, while no peer exists
+ * backlog) nothing was started: ERR_WOULD_BLOCK, the handle stays fresh and
+ * a later start is allowed. connect_complete called before readiness, while no peer exists
  * yet, is ERR_STATE and may be retried after readiness. *out_state is
  * written on OK only. No address retry is attempted.
  */
@@ -55,9 +55,12 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_complete(
 
 /*
  * Non-blocking, partial socket I/O. On OK, the byte count is positive unless
- * the requested send length was zero. Would-block is ERR_OS with EAGAIN or
- * EWOULDBLOCK. Receive EOF and connection-loss conditions are ERR_CLOSED.
- * Send never raises SIGPIPE.
+ * the requested send length was zero. ERR_WOULD_BLOCK when nothing can be
+ * done now, the normal state of a non-blocking socket. ERR_CLOSED is the
+ * clean end: EOF on receive, EPIPE or ENOTCONN on send. ERR_RESET is the
+ * peer's reset (ECONNRESET) and never an end of stream: a body delimited by
+ * the close is incomplete. Accept without a pending connection is
+ * ERR_WOULD_BLOCK as well. Send never raises SIGPIPE.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_receive(
     maelys_sys_socket_t *socket_handle,
@@ -82,8 +85,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_shutdown(
 
 /*
  * Options applied before bind(2). Zero-initialize the structure (`= {0}`):
- * every field defaults to off, and fields added by a later minor release
- * default to off as well. reuse_address sets SO_REUSEADDR; the contracted
+ * every field defaults to off. Its fields are fixed within ABI 1, as those
+ * of every public structure the library reads: a new option is a new
+ * structure and a new function. reuse_address sets SO_REUSEADDR; the contracted
  * effect is rebinding a local address still held by TIME_WAIT connections.
  * Other consequences of the option (BSD and Linux differ on overlapping
  * binds) are native behavior, not part of this contract. When the option

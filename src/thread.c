@@ -127,6 +127,16 @@ maelys_sys_result_t maelys_sys_condition_wait_until(
     return MAELYS_SYS_ERR_OS;
 }
 
+maelys_sys_result_t maelys_sys_condition_wait(
+    maelys_sys_condition_t *condition,
+    maelys_sys_mutex_t *mutex) {
+    if (!condition || !mutex) return MAELYS_SYS_ERR_ARGUMENT;
+    int status = pthread_cond_wait(&condition->native, &mutex->native);
+    if (status == 0) return MAELYS_SYS_OK;
+    errno = status;
+    return MAELYS_SYS_ERR_OS;
+}
+
 static maelys_sys_result_t condition_notify(
     maelys_sys_condition_t *condition,
     int broadcast) {

@@ -200,6 +200,7 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
     size_t length,
     mode_t final_mode);
 
+/* Fields fixed within ABI 1, like every public structure the library reads. */
 typedef struct maelys_sys_publish_options {
     /* Also make the destination's parent directory durable on success. The
      * parent is the destination path up to its last separator (trailing
@@ -258,6 +259,7 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_publish_noreplace(
  */
 typedef struct maelys_sys_file_lock maelys_sys_file_lock_t;
 
+/* Fields fixed within ABI 1; NULL selects the defaults. */
 typedef struct maelys_sys_file_lock_options {
     /* Exclusive (LOCK_EX) rather than shared (LOCK_SH). */
     int exclusive;

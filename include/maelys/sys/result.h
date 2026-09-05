@@ -32,7 +32,10 @@ typedef enum maelys_sys_result {
     /* Added for the file primitives; appended so ABI 1 values are stable. */
     MAELYS_SYS_ERR_EXISTS,   /* a destination or a file already exists */
     MAELYS_SYS_ERR_BUSY,     /* a lock is held elsewhere and waiting was refused */
-    MAELYS_SYS_ERR_IDENTITY  /* the file is not what the caller expected of it */
+    MAELYS_SYS_ERR_IDENTITY, /* the file is not what the caller expected of it */
+    /* Added in 0.9 for the socket and descriptor I/O. */
+    MAELYS_SYS_ERR_RESET,      /* the peer reset the connection: not an end of stream */
+    MAELYS_SYS_ERR_WOULD_BLOCK /* nothing to do now on a non-blocking descriptor */
 } maelys_sys_result_t;
 
 const char *maelys_sys_result_string(maelys_sys_result_t result);

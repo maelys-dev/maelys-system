@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "maelys/sys/loop.h"
 #include "maelys/sys/result.h"
 
 #ifdef __cplusplus
@@ -35,15 +36,32 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_close(int *fd);
 
 /*
  * Socket-only I/O. On success, *out_written may be shorter than length.
- * SIGPIPE suppression is per-call when MSG_NOSIGNAL is available. On systems
- * that only provide SO_NOSIGPIPE, the function enables that persistent socket
- * option as a documented portability fallback.
+ * SIGPIPE is suppressed per call with MSG_NOSIGNAL, which both hosts
+ * provide; no socket option is touched. ERR_WOULD_BLOCK when nothing can be
+ * sent now, ERR_RESET when the peer reset the connection, ERR_CLOSED when
+ * it is gone (EPIPE, ENOTCONN); on ERR_OS errno identifies send(2).
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
     int fd,
     const void *bytes,
     size_t length,
     size_t *out_written);
+
+/*
+ * Waits until fd is ready for one of the interests (READ, WRITE) or the
+ * absolute monotonic deadline passes; INFINITE is accepted. On OK
+ * *out_flags carries what poll(2) reported, in the flags loop.h defines,
+ * with HUP and ERROR as loop.h says, and is never empty. ERR_TIMEOUT when
+ * the deadline passed, after one poll without wait so a ready descriptor is
+ * reported even then; EINTR resumes the wait with the remaining time. A
+ * closed descriptor is ERR_ARGUMENT with errno EBADF. One poll(2), for a
+ * consumer that waits on a single descriptor and needs no loop.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_wait(
+    int fd,
+    unsigned interests,
+    uint64_t deadline_ms,
+    unsigned *out_flags);
 
 /*
  * Sends the complete buffer before the absolute monotonic deadline. A finite

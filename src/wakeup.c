@@ -1,14 +1,28 @@
 #include "src/internal.h"
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <sys/eventfd.h>
+#endif
+
+/*
+ * Linux: one eventfd, a counter the kernel keeps; a signal is an atomic
+ * add, a consume reads it back to zero, no lock and one descriptor. Other
+ * hosts: a pipe, with a pending flag under a mutex so a signal writes at
+ * most one byte between two consumes. Both are level-triggered: readable
+ * until consumed.
+ */
 struct maelys_sys_wakeup {
     int read_fd;
     int write_fd;
+#if !defined(__linux__)
     pthread_mutex_t mutex;
     int pending;
+#endif
 };
 
 maelys_sys_result_t maelys_sys_wakeup_create(
@@ -19,6 +33,15 @@ maelys_sys_result_t maelys_sys_wakeup_create(
     if (!wakeup) return MAELYS_SYS_ERR_MEMORY;
     wakeup->read_fd = -1;
     wakeup->write_fd = -1;
+#if defined(__linux__)
+    int fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (fd < 0) {
+        free(wakeup);
+        return MAELYS_SYS_ERR_OS;
+    }
+    wakeup->read_fd = fd;
+    wakeup->write_fd = fd;
+#else
     int pair[2] = {-1, -1};
     maelys_sys_result_t result = maelys_sys_pipe_cloexec(pair);
     if (result != MAELYS_SYS_OK) {
@@ -44,6 +67,7 @@ maelys_sys_result_t maelys_sys_wakeup_create(
         errno = status;
         return MAELYS_SYS_ERR_OS;
     }
+#endif
     *out_wakeup = wakeup;
     return MAELYS_SYS_OK;
 }
@@ -54,6 +78,17 @@ int maelys_sys_wakeup_fd(const maelys_sys_wakeup_t *wakeup) {
 
 maelys_sys_result_t maelys_sys_wakeup_signal(maelys_sys_wakeup_t *wakeup) {
     if (!wakeup) return MAELYS_SYS_ERR_ARGUMENT;
+#if defined(__linux__)
+    uint64_t one = 1;
+    ssize_t written;
+    do {
+        written = write(wakeup->write_fd, &one, sizeof(one));
+    } while (written < 0 && errno == EINTR);
+    if (written == (ssize_t)sizeof(one)) return MAELYS_SYS_OK;
+    /* The counter is saturated: the wakeup is pending all the same. */
+    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return MAELYS_SYS_OK;
+    return MAELYS_SYS_ERR_OS;
+#else
     int status = pthread_mutex_lock(&wakeup->mutex);
     if (status != 0) {
         errno = status;
@@ -80,10 +115,21 @@ maelys_sys_result_t maelys_sys_wakeup_signal(maelys_sys_wakeup_t *wakeup) {
         result = MAELYS_SYS_ERR_OS;
     }
     return result;
+#endif
 }
 
 maelys_sys_result_t maelys_sys_wakeup_consume(maelys_sys_wakeup_t *wakeup) {
     if (!wakeup) return MAELYS_SYS_ERR_ARGUMENT;
+#if defined(__linux__)
+    for (;;) {
+        uint64_t value = 0;
+        ssize_t got = read(wakeup->read_fd, &value, sizeof(value));
+        if (got == (ssize_t)sizeof(value)) return MAELYS_SYS_OK;
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return MAELYS_SYS_OK;
+        return MAELYS_SYS_ERR_OS;
+    }
+#else
     int status = pthread_mutex_lock(&wakeup->mutex);
     if (status != 0) {
         errno = status;
@@ -107,13 +153,18 @@ maelys_sys_result_t maelys_sys_wakeup_consume(maelys_sys_wakeup_t *wakeup) {
         result = MAELYS_SYS_ERR_OS;
     }
     return result;
+#endif
 }
 
 void maelys_sys_wakeup_destroy(maelys_sys_wakeup_t *wakeup) {
     if (!wakeup) return;
+#if defined(__linux__)
+    wakeup->write_fd = -1;
+    (void)maelys_sys_fd_close(&wakeup->read_fd);
+#else
     (void)maelys_sys_fd_close(&wakeup->read_fd);
     (void)maelys_sys_fd_close(&wakeup->write_fd);
     (void)pthread_mutex_destroy(&wakeup->mutex);
+#endif
     free(wakeup);
 }
-

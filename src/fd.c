@@ -4,6 +4,7 @@
 
 #include "maelys/sys/clock.h"
 #include "maelys/sys/fd.h"
+#include "maelys/sys/loop.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -11,6 +12,11 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+/* Both hosts of the 0.x line define it; per-call suppression needs it. */
+#ifndef MSG_NOSIGNAL
+#error "MSG_NOSIGNAL is required"
+#endif
 
 static maelys_sys_result_t set_flag(int fd, int get_command, int flag, int enabled) {
     if (fd < 0) return MAELYS_SYS_ERR_ARGUMENT;
@@ -87,50 +93,72 @@ maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
         return MAELYS_SYS_ERR_ARGUMENT;
     }
     *out_written = 0;
-#if !defined(MSG_NOSIGNAL) && defined(SO_NOSIGPIPE)
-    int enabled = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)) != 0) {
-        return MAELYS_SYS_ERR_OS;
-    }
-#endif
     ssize_t written;
     do {
-#ifdef MSG_NOSIGNAL
         written = send(fd, bytes, length, MSG_NOSIGNAL);
-#else
-        written = send(fd, bytes, length, 0);
-#endif
     } while (written < 0 && errno == EINTR);
     if (written < 0) {
-        if (errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN) {
-            return MAELYS_SYS_ERR_CLOSED;
-        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
+        if (errno == ECONNRESET) return MAELYS_SYS_ERR_RESET;
+        if (errno == EPIPE || errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
         return MAELYS_SYS_ERR_OS;
     }
     *out_written = (size_t)written;
     return MAELYS_SYS_OK;
 }
 
-static maelys_sys_result_t wait_writable(int fd, uint64_t deadline_ms) {
+maelys_sys_result_t maelys_sys_fd_wait(
+    int fd,
+    unsigned interests,
+    uint64_t deadline_ms,
+    unsigned *out_flags) {
+    unsigned known = MAELYS_SYS_INTEREST_READ | MAELYS_SYS_INTEREST_WRITE;
+    if (out_flags) *out_flags = 0;
+    if (fd < 0 || !interests || (interests & ~known) || !out_flags) {
+        return MAELYS_SYS_ERR_ARGUMENT;
+    }
+    short events = 0;
+    if (interests & MAELYS_SYS_INTEREST_READ) events |= POLLIN;
+    if (interests & MAELYS_SYS_INTEREST_WRITE) events |= POLLOUT;
     for (;;) {
         uint64_t remaining = 0;
         maelys_sys_result_t result =
             maelys_sys_deadline_remaining(deadline_ms, &remaining);
         if (result != MAELYS_SYS_OK) return result;
-        if (remaining == 0) return MAELYS_SYS_ERR_TIMEOUT;
+        /* A past deadline is one poll with no wait: readiness still answers. */
         int timeout = remaining == MAELYS_SYS_DEADLINE_INFINITE ? -1 :
             remaining > (uint64_t)INT_MAX ? INT_MAX : (int)remaining;
-        struct pollfd descriptor = {.fd = fd, .events = POLLOUT, .revents = 0};
+        struct pollfd descriptor = {.fd = fd, .events = events, .revents = 0};
         int ready = poll(&descriptor, 1, timeout);
         if (ready > 0) {
-            if (descriptor.revents & POLLOUT) return MAELYS_SYS_OK;
-            if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                return MAELYS_SYS_ERR_CLOSED;
+            if (descriptor.revents & POLLNVAL) {
+                errno = EBADF;
+                return MAELYS_SYS_ERR_ARGUMENT;
             }
-            continue;
+            unsigned flags = 0;
+            if (descriptor.revents & (POLLIN | POLLPRI)) flags |= MAELYS_SYS_EVENT_READ;
+            if (descriptor.revents & POLLOUT) flags |= MAELYS_SYS_EVENT_WRITE;
+            if (descriptor.revents & POLLHUP) flags |= MAELYS_SYS_EVENT_HUP;
+            if (descriptor.revents & POLLERR) flags |= MAELYS_SYS_EVENT_ERROR;
+            if (!flags) continue;
+            *out_flags = flags;
+            return MAELYS_SYS_OK;
         }
         if (ready == 0) return MAELYS_SYS_ERR_TIMEOUT;
         if (errno != EINTR) return MAELYS_SYS_ERR_OS;
+    }
+}
+
+static maelys_sys_result_t wait_writable(int fd, uint64_t deadline_ms) {
+    for (;;) {
+        unsigned flags = 0;
+        maelys_sys_result_t result = maelys_sys_fd_wait(
+            fd, MAELYS_SYS_INTEREST_WRITE, deadline_ms, &flags);
+        if (result != MAELYS_SYS_OK) return result;
+        if (flags & MAELYS_SYS_EVENT_WRITE) return MAELYS_SYS_OK;
+        if (flags & (MAELYS_SYS_EVENT_ERROR | MAELYS_SYS_EVENT_HUP)) {
+            return MAELYS_SYS_ERR_CLOSED;
+        }
     }
 }
 
@@ -151,10 +179,7 @@ maelys_sys_result_t maelys_sys_socket_send_all_until(
         size_t written = 0;
         maelys_sys_result_t sent =
             maelys_sys_socket_send_nosigpipe(fd, cursor, length, &written);
-        if (sent == MAELYS_SYS_ERR_OS &&
-            (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            continue;
-        }
+        if (sent == MAELYS_SYS_ERR_WOULD_BLOCK) continue;
         if (sent != MAELYS_SYS_OK) return sent;
         if (written == 0) return MAELYS_SYS_ERR_CLOSED;
         cursor += written;

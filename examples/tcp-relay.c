@@ -77,8 +77,7 @@ static int update_watch(maelys_sys_loop_t *loop, maelys_sys_watch_t watch,
 }
 
 static int would_block(maelys_sys_result_t result) {
-    return result == MAELYS_SYS_ERR_OS &&
-        (errno == EAGAIN || errno == EWOULDBLOCK);
+    return result == MAELYS_SYS_ERR_WOULD_BLOCK;
 }
 
 static int receive_into(maelys_sys_socket_t *source, relay_buffer_t *buffer) {

@@ -79,7 +79,17 @@ the optional umbrella header `maelys/sys.h`.
   refused so that completion stays with `connect_complete`.
 - Wakeup destruction requires all concurrent signalers to have stopped.
 - Mutexes and conditions must not be destroyed while another thread uses them.
-- On `MAELYS_SYS_ERR_OS`, `errno` identifies the failed POSIX operation.
+- On `MAELYS_SYS_ERR_OS`, `errno` identifies the failed POSIX operation; the
+  frequent conditions have their own codes and need no `errno`: `ERR_CLOSED`
+  (clean end of stream), `ERR_RESET` (the peer reset, never an end of
+  stream), `ERR_WOULD_BLOCK` (nothing to do now), `ERR_TIMEOUT`, `ERR_BUSY`,
+  `ERR_EXISTS`, `ERR_IDENTITY`.
+- A consumer checks `MAELYS_SYS_ABI_VERSION == 1` when it compiles and
+  `maelys_sys_abi_version()` when it runs; the version string is information,
+  never a pin. The pin is the commit in its `adapter/MAELYS_SYSTEM_PIN`, and
+  the public history of this repository is not rewritten: the restart of
+  2026-09-03 at the 0.5.1 tree was the last, and invalidated every commit pin
+  taken before it.
 
 ## Reactor contract
 
