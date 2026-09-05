@@ -29,6 +29,11 @@
   analyzer in CI as Linux did; `make release-check` runs every gate
   RELEASING.md requires; `WERROR=` lets a packaged build survive a newer
   compiler's warnings while the checks keep `-Werror`.
+- Docs: `thread.h` says the mutex is held across `condition_wait_until`
+  and that OK may be a spurious wakeup; `wakeup.h` says the descriptor is
+  borrowed; `docs/architecture.md` covers 0.6 to 0.8; `adapter/PACKAGES`
+  declares python3 for the macOS runners as `make check` needs it; the
+  send-after-close test expects `ERR_CLOSED` alone.
 - Adopt maelys-release 0.6.1: the managed files are regenerated, and
   `.github/workflows/ci.yml` calls the socle's `check-product.yml`, which
   reads `adapter/` itself and checks the drift of the managed files from
