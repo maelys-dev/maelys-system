@@ -10,7 +10,10 @@ BUILD ?= build/release
 CPPFLAGS ?=
 CFLAGS ?= -O2 -g
 CXXFLAGS ?= -O2 -g
-WARNINGS := -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow \
+# Warnings are errors for the checks and the CI; a packaged build passes
+# WERROR= so a newer compiler's new warning cannot fail a release.
+WERROR ?= -Werror
+WARNINGS := -Wall -Wextra -Wpedantic $(WERROR) -Wconversion -Wshadow \
 	-Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 COMMON_CPPFLAGS := -Iinclude -I.
 # Clang honors a (void) cast on warn_unused_result; GCC does not, so the
@@ -20,7 +23,7 @@ COMMON_CPPFLAGS += -DMAELYS_SYS_STRICT_RESULTS
 endif
 COMMON_CFLAGS := -std=c11 $(WARNINGS) -pthread -fPIC
 TEST_CPPFLAGS = -DMAELYS_SYS_EXPECTED_VERSION='"$(VERSION)"'
-COMMON_CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic -Werror
+COMMON_CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic $(WERROR)
 
 VERSION := $(shell sed -n '1p' VERSION)
 UNAME_S := $(shell uname -s)
@@ -51,8 +54,8 @@ EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
 EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 
-.PHONY: all check test stress fault-check consumer-check clean header-check \
-	check-version audit asan ubsan asan-ubsan tsan analyze install \
+.PHONY: all check test tests stress fault-check consumer-check clean header-check \
+	check-version audit asan ubsan asan-ubsan tsan analyze install release-check \
 	install-check uninstall dist examples examples-check benchmark \
 	mutation-check package-release package-linux
 
@@ -88,6 +91,9 @@ $(HEADER_CPP): tests/header_cpp.cpp
 $(PC): pkgconfig/maelys-sys.pc.in VERSION
 	@mkdir -p $(@D)
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
+
+# Builds every test binary without running it.
+tests: $(TESTS)
 
 test: $(TESTS)
 	$(TEST)
@@ -129,6 +135,16 @@ benchmark: $(BENCHMARK)
 	./scripts/run-benchmarks.sh $(BUILD)
 
 check: test header-check check-version audit examples-check
+
+# Everything RELEASING.md requires of a commit before it is tagged.
+release-check:
+	$(MAKE) clean check
+	$(MAKE) analyze
+	$(MAKE) mutation-check
+	$(MAKE) asan-ubsan
+	$(MAKE) tsan
+	$(MAKE) clean check
+	$(MAKE) install-check
 
 asan:
 	$(MAKE) clean

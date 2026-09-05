@@ -31,12 +31,23 @@ if source.count(old) < 1:
     raise SystemExit("mutation anchor missing: " + old)
 path.write_text(source.replace(old, new, 1))
 PY
-    if python3 "$root/scripts/run-with-timeout.py" 30 \
-        make -C "$mutant" BUILD=build/mutant test >/dev/null 2>&1; then
+    # The build runs without a time limit, so a slow host cannot pass a
+    # mutant off as killed; only the tests are bounded, and a hang is a
+    # kill of its own kind, said as such.
+    if ! make -C "$mutant" BUILD=build/mutant all tests >/dev/null 2>&1; then
+        printf '%s\n' "mutation killed by the compiler: $name"
+        killed=$((killed + 1))
+        return 0
+    fi
+    status=0
+    python3 "$root/scripts/run-with-timeout.py" 60 \
+        make -C "$mutant" BUILD=build/mutant test >/dev/null 2>&1 || status=$?
+    if test "$status" -eq 0; then
         printf '%s\n' "mutation survived: $name" >&2
         return 1
     fi
-    printf '%s\n' "mutation killed: $name"
+    if test "$status" -eq 124; then printf '%s\n' "mutation killed by a hang: $name"
+    else printf '%s\n' "mutation killed: $name"; fi
     killed=$((killed + 1))
 }
 

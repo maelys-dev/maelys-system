@@ -73,8 +73,23 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Kill targeted reactor mutants
+      - name: Kill every listed mutant
         run: make mutation-check CC=clang CXX=clang++
+
+  # kqueue and the macOS branches are mutated and sanitized here; the
+  # Linux jobs above never execute them.
+  macos-gates:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: ASan and UBSan
+        run: make asan-ubsan CC=clang CXX=clang++
+      - name: TSan
+        run: make tsan CC=clang CXX=clang++
+      - name: Kill every listed mutant
+        run: make mutation-check CC=clang CXX=clang++
+      - name: Static analyzer
+        run: make analyze CC=clang
 
   benchmark:
     runs-on: ubuntu-24.04
