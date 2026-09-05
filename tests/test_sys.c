@@ -463,7 +463,8 @@ static int test_socket_send(void) {
     size_t written = 0;
     maelys_sys_result_t result = maelys_sys_socket_send_nosigpipe(
         sockets[0], "x", 1, &written);
-    ASSERT_TRUE(result == MAELYS_SYS_ERR_CLOSED || result == MAELYS_SYS_ERR_OS);
+    /* EPIPE, on both hosts, and no signal. */
+    ASSERT_TRUE(result == MAELYS_SYS_ERR_CLOSED);
     ASSERT_TRUE(sigpipe_count == 0);
     ASSERT_TRUE(sigaction(SIGPIPE, &previous, NULL) == 0);
     ASSERT_TRUE(maelys_sys_fd_close(&sockets[0]) == MAELYS_SYS_OK);

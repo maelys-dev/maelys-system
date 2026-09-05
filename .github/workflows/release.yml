@@ -28,6 +28,7 @@ jobs:
     with:
       product: maelys-system
       linux_packages: build-essential dpkg-dev file rpm python3
+      macos_packages: python3
 
   tap-libmaelys-sys:
     needs: release

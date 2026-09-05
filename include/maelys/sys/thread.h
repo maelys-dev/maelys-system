@@ -21,7 +21,14 @@ void maelys_sys_mutex_destroy(maelys_sys_mutex_t *mutex);
 
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_create(
     maelys_sys_condition_t **out_condition);
-/* Requires a finite absolute monotonic deadline; INFINITE is rejected. */
+/*
+ * Requires a finite absolute monotonic deadline; INFINITE is rejected. The
+ * caller holds mutex on entry and holds it again on return, whatever the
+ * result. A return of OK means the condition was signalled or woke
+ * spuriously, as pthread conditions do: re-check the predicate in a loop.
+ * ERR_TIMEOUT means the deadline passed, on the monotonic clock on both
+ * hosts.
+ */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_condition_wait_until(
     maelys_sys_condition_t *condition,
     maelys_sys_mutex_t *mutex,
