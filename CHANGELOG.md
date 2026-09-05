@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 - 2026-09-05
 
 - Reactor: a watch id and a timer id can no longer collide (a kind bit in
   the id, 31-bit generations); cancelling a timer with a watch id or

@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#define MAELYS_SYS_VERSION "0.8.0"
+#define MAELYS_SYS_VERSION "0.8.1"
 #define MAELYS_SYS_ABI_VERSION 1u
 
 const char *maelys_sys_version_string(void);
