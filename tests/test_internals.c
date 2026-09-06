@@ -116,15 +116,16 @@ static int random_model(void) {
     CHECK(maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) == MAELYS_SYS_OK);
     uint64_t base = 0;
     CHECK(maelys_sys_monotonic_ms(&base) == MAELYS_SYS_OK);
-    /* A monotonic clock this young cannot host past deadlines. */
-    CHECK(base >= MODEL_PAST_SPAN);
+    /* Past deadlines are drawn below the current clock: a monotonic clock
+     * younger than the span (a fresh VM or container) offers fewer. */
+    uint32_t past_span = base < MODEL_PAST_SPAN ? (uint32_t)base : MODEL_PAST_SPAN;
     for (size_t iteration = 0; iteration < MODEL_ITERATIONS; ++iteration) {
         uint32_t roll = lcg() % 100u;
         if (roll < 45u && live_count < MODEL_MAX_LIVE) {
             int past = (lcg() & 1u) != 0 &&
-                past_created < (MODEL_PAST_SPAN / 4u) * 3u;
+                past_created < (past_span / 4u) * 3u;
             unsigned char *used = past ? used_past : used_future;
-            uint32_t span = past ? MODEL_PAST_SPAN : MODEL_FUTURE_SPAN;
+            uint32_t span = past ? past_span : MODEL_FUTURE_SPAN;
             uint32_t offset;
             do { offset = lcg() % span; } while (used[offset]);
             used[offset] = 1;

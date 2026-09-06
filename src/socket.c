@@ -283,9 +283,11 @@ maelys_sys_result_t maelys_sys_socket_listen(
         MAELYS_SYS_OK : MAELYS_SYS_ERR_OS;
 }
 
-/* No pending connection on a non-blocking listener is the normal case. */
+/* No pending connection on a non-blocking listener is the normal case; a
+ * connection aborted by its peer before accept is the same case for the
+ * server: nothing to accept now, listen on. */
 static maelys_sys_result_t accept_failure(void) {
-    return errno == EAGAIN || errno == EWOULDBLOCK ?
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED ?
         MAELYS_SYS_ERR_WOULD_BLOCK : MAELYS_SYS_ERR_OS;
 }
 

@@ -46,7 +46,8 @@ typedef struct maelys_sys_event {
 typedef enum maelys_sys_step_result {
     MAELYS_SYS_STEP_PROGRESS = 0,
     MAELYS_SYS_STEP_TIMEOUT,
-    MAELYS_SYS_STEP_STOPPED
+    MAELYS_SYS_STEP_STOPPED /* stop was requested: the step reports no event
+                               of its batch, all remain ready for later */
 } maelys_sys_step_result_t;
 
 int maelys_sys_loop_backend_available(maelys_sys_loop_backend_t backend);
@@ -62,7 +63,9 @@ const char *maelys_sys_loop_backend_name(const maelys_sys_loop_t *loop);
  * closing the descriptor. Should it close first, unwatch still releases
  * the registration and reports OK; on Linux a dup of that descriptor
  * keeps the epoll registration, and its events, alive until the dup
- * closes.
+ * closes: those events name a released watch and are dropped, so a step
+ * with nothing else ready returns to the kernel at once and spins until
+ * its deadline. Close every dup before unwatch.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_watch_fd(
     maelys_sys_loop_t *loop,

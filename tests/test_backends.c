@@ -121,6 +121,73 @@ static int receive_would_block(maelys_sys_loop_backend_t backend) {
     return 0;
 }
 
+/* A peer's reset seen from the sending side is ERR_RESET on both hosts,
+ * whether the first report comes from a bare send or from a wait; once
+ * reported, the socket is closed. */
+static int reset_on_send(maelys_sys_loop_backend_t backend) {
+    (void)backend;
+    for (int through_wait = 0; through_wait < 2; ++through_wait) {
+        maelys_sys_socket_t *listener = NULL;
+        struct sockaddr_in address;
+        socklen_t length = (socklen_t)sizeof(address);
+        CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &listener) ==
+            MAELYS_SYS_OK);
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        CHECK(maelys_sys_socket_bind(listener, (const struct sockaddr *)&address,
+            length) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_socket_listen(listener, 1) == MAELYS_SYS_OK);
+        CHECK(getsockname(maelys_sys_socket_native_fd(listener),
+            (struct sockaddr *)&address, &length) == 0);
+        maelys_sys_socket_t *client = NULL;
+        maelys_sys_socket_t *accepted = NULL;
+        maelys_sys_connect_state_t state;
+        unsigned flags = 0;
+        uint64_t deadline = 0;
+        CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) ==
+            MAELYS_SYS_OK);
+        CHECK(maelys_sys_socket_connect_start(client, (const struct sockaddr *)&address,
+            length, &state) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(listener),
+            MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_socket_accept(listener, NULL, NULL, &accepted) == MAELYS_SYS_OK);
+        if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
+            CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(client),
+                MAELYS_SYS_INTEREST_WRITE, deadline, &flags) == MAELYS_SYS_OK);
+        }
+        CHECK(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_OK);
+        /* The client resets: a close with linger 0 sends RST, not FIN. */
+        struct linger abort = {.l_onoff = 1, .l_linger = 0};
+        CHECK(setsockopt(maelys_sys_socket_native_fd(client), SOL_SOCKET, SO_LINGER,
+            &abort, (socklen_t)sizeof(abort)) == 0);
+        CHECK(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(accepted),
+            MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+        int fd = maelys_sys_socket_native_fd(accepted);
+        char byte = 0;
+        size_t written = 0;
+        errno = 0;
+        if (through_wait) {
+            CHECK(maelys_sys_socket_send_all_until(fd, &byte, 1u, deadline) ==
+                MAELYS_SYS_ERR_RESET);
+        } else {
+            CHECK(maelys_sys_socket_send_nosigpipe(fd, &byte, 1u, &written) ==
+                MAELYS_SYS_ERR_RESET);
+        }
+        CHECK(errno == ECONNRESET);
+        /* The reset was reported once; what remains is a closed socket. */
+        CHECK(maelys_sys_socket_send_nosigpipe(fd, &byte, 1u, &written) ==
+            MAELYS_SYS_ERR_CLOSED);
+        CHECK(maelys_sys_socket_send_all_until(fd, &byte, 1u, deadline) ==
+            MAELYS_SYS_ERR_CLOSED);
+        CHECK(maelys_sys_socket_release(&accepted) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_socket_release(&listener) == MAELYS_SYS_OK);
+    }
+    return 0;
+}
+
 /* READ|WRITE interest, both ready: one event carrying both flags. */
 static int merged_directions(maelys_sys_loop_backend_t backend) {
     fixture_t fixture;
@@ -340,6 +407,7 @@ static int run_backend(maelys_sys_loop_backend_t backend, const char *label) {
     CHECK(fairness(backend) == 0);
     CHECK(hup_and_error_by_host(backend) == 0);
     CHECK(receive_would_block(backend) == 0);
+    CHECK(reset_on_send(backend) == 0);
     printf("ok - %s backend parity\n", label);
     return 0;
 }

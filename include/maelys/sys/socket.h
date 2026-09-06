@@ -101,8 +101,11 @@ typedef struct maelys_sys_socket_bind_options {
  * Mechanical server operations. Address storage follows the native POSIX
  * bind/accept lifetime rules. listen backlog must be non-negative. Accepted
  * handles have the same non-blocking, CLOEXEC and SIGPIPE guarantees as
- * socket_create. No listener policy or connection limit is implied.
- * socket_bind is socket_bind_with and NULL options.
+ * socket_create. accept is ERR_WOULD_BLOCK when nothing is pending and
+ * when the pending connection was aborted by its peer before the call
+ * (ECONNABORTED): the listener is fine, accept again later. No listener
+ * policy or connection limit is implied. socket_bind is socket_bind_with
+ * and NULL options.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_bind_with(
     maelys_sys_socket_t *socket_handle,

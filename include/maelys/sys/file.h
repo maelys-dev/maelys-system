@@ -135,9 +135,11 @@ int maelys_sys_file_identity_same(
 
 /*
  * Opens a regular file the caller intends to trust: read-only, close-on-exec,
- * not following a final symbolic link, and with O_NONBLOCK during open(2)
- * so that a FIFO planted at the path cannot suspend the caller; the flag is
- * cleared before the descriptor is returned. The descriptor is then checked
+ * not following a final symbolic link, never acquiring a controlling
+ * terminal (O_NOCTTY, so a terminal planted at the path is refused without
+ * side effect), and with O_NONBLOCK during open(2) so that a FIFO planted
+ * at the path cannot suspend the caller; the flag is cleared before the
+ * descriptor is returned. The descriptor is then checked
  * with maelys_sys_file_verify. What open(2) itself refuses because the
  * object is not a plain file (ELOOP, EISDIR, ENXIO, EOPNOTSUPP) is
  * ERR_IDENTITY with MISMATCH_TYPE, so the same object gives the same result
@@ -189,10 +191,13 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_directory_sync(
  * durable as file_sync does, and closes. The file is created with mode
  * 0600 under the umask and only receives final_mode, which fchmod(2)
  * applies as given without the umask, after its content, so a partial file
- * is never readable under the final permissions. On any failure the file
- * is removed with unlink_same, so only the file that was created goes,
- * and the failure reported. bytes may be NULL when length is
- * 0. Durability covers the file, not its directory entry.
+ * is never readable under the final permissions. On any failure after
+ * creation the inode still owned goes back to 0600, then the file is
+ * removed with unlink_same, so only the file that was created goes and a
+ * retry on the same path is a fresh creation; unlink_same's window applies.
+ * Should the initial fstat(2) fail, no identity was captured and the empty
+ * 0600 file is left rather than a path unlinked blind. bytes may be NULL
+ * when length is 0. Durability covers the file, not its directory entry.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
     const char *path,
@@ -204,29 +209,40 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_write_exclusive(
 typedef struct maelys_sys_publish_options {
     /* Also make the destination's parent directory durable on success. The
      * parent is the destination path up to its last separator (trailing
-     * separators do not count), resolved again after the rename and
-     * followed through a final symbolic link: a directory is not a trusted
-     * object here, and /tmp on macOS is a link. */
+     * separators do not count), followed through a final symbolic link (a
+     * directory is not a trusted object here, and /tmp on macOS is a link)
+     * and opened before the rename. That descriptor is the parent the rename
+     * and the sync use, so a later replacement of the path redirects
+     * neither. */
     int sync_parent;
 } maelys_sys_publish_options_t;
 
 /*
  * Publishes a staged regular file under a new name: the destination
  * appears atomically and is never replaced, by renameat2(RENAME_NOREPLACE)
- * on Linux and renamex_np(RENAME_EXCL) on macOS. staging must name a
+ * on Linux and renameatx_np(RENAME_EXCL) on macOS. staging must name a
  * regular file without following a link (ERR_IDENTITY otherwise: the two
  * hosts disagree on what linking a symbolic link means, so it is refused
- * rather than interpreted). ERR_EXISTS when the destination already
- * exists, whatever it is, and when staging and destination already name
- * the same file; the staged file is then left in place. When the file
- * system refuses the flag (EINVAL on Linux, ENOTSUP on macOS) the call
- * fails with ERR_UNSUPPORTED and nothing moved: there is no fallback, the
- * unsafe one of checking the destination and then renaming least of all,
- * and link(2) is not exclusive on every contracted file system nor
- * atomic for a reader counting links. With sync_parent, an ERR_OS whose
- * errno comes from open(2) or the sync means the file is published and
- * its entry may not be durable: retrying reports ERR_EXISTS. options may
- * be NULL.
+ * rather than interpreted). Both parent directories are opened first,
+ * followed through a final symbolic link, and the rename runs through
+ * those descriptors, so a replacement of either path after the open
+ * redirects nothing. The type check and the rename are two calls: an
+ * entry that replaces the staging between them is moved as it is; a
+ * caller that lets another actor write the staging's directory has no
+ * staging. There are exactly two states after the call, staging in place
+ * or destination published, a crash included. ERR_EXISTS when the
+ * destination already exists, whatever it is, and when staging and
+ * destination already name the same file; the staged file is then left in
+ * place. A path with no last component ("" or "/") is ERR_ARGUMENT;
+ * trailing separators do not count. When the file system refuses the flag
+ * (EINVAL on Linux, ENOTSUP on macOS) the call fails with ERR_UNSUPPORTED
+ * and nothing moved: there is no fallback, the unsafe one of checking the
+ * destination and then renaming least of all, and link(2) is not exclusive
+ * on every contracted file system nor atomic for a reader counting links.
+ * With sync_parent, an ERR_OS from the sync means the file is published
+ * and its entry may not be durable: a retry of the same call reports
+ * ERR_NOT_FOUND, the staging having moved, and directory_sync on the
+ * parent completes the durability. options may be NULL.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_publish_noreplace(
     const char *staging,

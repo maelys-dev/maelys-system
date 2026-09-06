@@ -84,6 +84,14 @@ maelys_sys_result_t maelys_sys_socketpair_cloexec(int type, int out_fds[2]) {
     return finish_pair(out_fds);
 }
 
+/* The pending error of a socket, consumed; 0 when none or not a socket. */
+static int pending_socket_error(int fd) {
+    int error = 0;
+    socklen_t length = (socklen_t)sizeof(error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) != 0) return 0;
+    return error;
+}
+
 maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
     int fd,
     const void *bytes,
@@ -98,9 +106,17 @@ maelys_sys_result_t maelys_sys_socket_send_nosigpipe(
         written = send(fd, bytes, length, MSG_NOSIGNAL);
     } while (written < 0 && errno == EINTR);
     if (written < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
-        if (errno == ECONNRESET) return MAELYS_SYS_ERR_RESET;
-        if (errno == EPIPE || errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
+        int error = errno;
+        if (error == EAGAIN || error == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
+        if (error == ECONNRESET) return MAELYS_SYS_ERR_RESET;
+        if (error == EPIPE && pending_socket_error(fd) == ECONNRESET) {
+            /* macOS answers EPIPE to the first send after a reset and keeps
+             * the reset in SO_ERROR; Linux answers ECONNRESET. One code. */
+            errno = ECONNRESET;
+            return MAELYS_SYS_ERR_RESET;
+        }
+        errno = error;
+        if (error == EPIPE || error == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
         return MAELYS_SYS_ERR_OS;
     }
     *out_written = (size_t)written;
@@ -144,7 +160,12 @@ maelys_sys_result_t maelys_sys_fd_wait(
             *out_flags = flags;
             return MAELYS_SYS_OK;
         }
-        if (ready == 0) return MAELYS_SYS_ERR_TIMEOUT;
+        if (ready == 0) {
+            /* A slice of INT_MAX ms elapsed with a deadline still ahead:
+             * wait on, do not report a timeout that has not come. */
+            if (remaining > (uint64_t)INT_MAX) continue;
+            return MAELYS_SYS_ERR_TIMEOUT;
+        }
         if (errno != EINTR) return MAELYS_SYS_ERR_OS;
     }
 }
@@ -157,6 +178,13 @@ static maelys_sys_result_t wait_writable(int fd, uint64_t deadline_ms) {
         if (result != MAELYS_SYS_OK) return result;
         if (flags & MAELYS_SYS_EVENT_WRITE) return MAELYS_SYS_OK;
         if (flags & (MAELYS_SYS_EVENT_ERROR | MAELYS_SYS_EVENT_HUP)) {
+            /* macOS reports a reset as HUP without WRITE, so send would
+             * never run: read the reason the way send would have found it. */
+            int error = pending_socket_error(fd);
+            if (error == ECONNRESET) {
+                errno = error;
+                return MAELYS_SYS_ERR_RESET;
+            }
             return MAELYS_SYS_ERR_CLOSED;
         }
     }
