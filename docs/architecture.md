@@ -13,7 +13,10 @@ identity-checked file lock, extracted after a survey of seven Maelys
 repositories that each carried their own copy. The 0.8 line adds the
 conditional removal by identity and, after a cold audit, writes the HUP and
 ERROR contract as the hosts allow and asks the backends for exactly the
-caller's capacity so no watch starves.
+caller's capacity so no watch starves. The 0.9 line names the frequent
+socket conditions (`ERR_RESET`, `ERR_WOULD_BLOCK`), adds a single-descriptor
+wait and a deadline-free condition wait, and moves the Linux wakeup to an
+eventfd; 0.9.1 anchors both parents of a publication by descriptor.
 
 The reactor owns registrations and timer bookkeeping. It never
 owns watched descriptors and never runs domain callbacks. Egress and Orchestrator
@@ -31,7 +34,7 @@ The library has three release layers:
 - 0.3 freezes ABI 1 after adversarial, consumer and multi-architecture gates.
 
 The file primitives live in one translation unit that carries the feature
-macros for `O_NOFOLLOW`, `flock`, `renameat2` and `renamex_np`, so no
+macros for `O_NOFOLLOW`, `flock`, `renameat2` and `renameatx_np`, so no
 consumer guards those names again; every path is opened close-on-exec
 without following a final link, and each contract names the window POSIX
 leaves open rather than hiding it.

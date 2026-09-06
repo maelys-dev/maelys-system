@@ -1,6 +1,6 @@
 /*
  * File primitives. This unit carries the feature macros that make
- * O_NOFOLLOW, flock(2), renameat2(2) and renamex_np(2) visible on every
+ * O_NOFOLLOW, flock(2), renameat2(2) and renameatx_np(2) visible on every
  * host, so the consumers do not have to.
  */
 #ifndef _GNU_SOURCE
@@ -16,7 +16,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,9 +42,12 @@ static int file_fault(const char *step);
 static int file_fault_at(const char *step, const char *path);
 #define FAULT(step) (file_fault(step) != 0)
 #define FAULT_AT(step, path) (file_fault_at(step, path) != 0)
+static void file_sync_observed(int fd);
+#define OBSERVE_SYNC(fd) file_sync_observed(fd)
 #else
 #define FAULT(step) 0
 #define FAULT_AT(step, path) 0
+#define OBSERVE_SYNC(fd) ((void)0)
 #endif
 
 struct maelys_sys_file_lock {
@@ -144,7 +146,7 @@ static maelys_sys_result_t open_plain(
     const char *path, int flags, mode_t mode, int *out_fd) {
     *out_fd = -1;
     if (FAULT("open")) return MAELYS_SYS_ERR_OS;
-    int fd = open(path, flags | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, mode);
+    int fd = open(path, flags | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY, mode);
     if (fd < 0) {
         switch (errno) {
             case ENOENT: return MAELYS_SYS_ERR_NOT_FOUND;
@@ -231,6 +233,7 @@ maelys_sys_result_t maelys_sys_file_read_bounded(
 }
 
 static maelys_sys_result_t sync_descriptor(int fd) {
+    OBSERVE_SYNC(fd);
 #if defined(__APPLE__) && defined(F_FULLFSYNC)
     if (!FAULT("fullfsync") && fcntl(fd, F_FULLFSYNC) == 0) return MAELYS_SYS_OK;
     /* Only a refusal falls back to fsync(2): an I/O error is a lost write,
@@ -334,15 +337,10 @@ maelys_sys_result_t maelys_sys_file_write_exclusive(
     struct stat created;
     maelys_sys_result_t result = MAELYS_SYS_OK;
     if (FAULT("fstat") || fstat(fd, &created) != 0) {
-        /* No identity to compare with: remove only what a fresh creation
-         * looks like, an empty regular file of ours with a single link. */
+        /* No identity, so no conditional removal: the empty 0600 file is
+         * left rather than a path unlinked blind. */
         int saved = errno;
-        struct stat now;
         (void)maelys_sys_fd_close(&fd);
-        if (lstat(path, &now) == 0 && S_ISREG(now.st_mode) && now.st_size == 0 &&
-            now.st_nlink == 1 && now.st_uid == geteuid()) {
-            (void)unlink(path);
-        }
         errno = saved;
         return MAELYS_SYS_ERR_OS;
     }
@@ -352,6 +350,9 @@ maelys_sys_result_t maelys_sys_file_write_exclusive(
     }
     if (result == MAELYS_SYS_OK) result = sync_descriptor(fd);
     int saved = errno;
+    /* Whatever the removal below can do, the inode still owned goes back
+     * to 0600 first: a partial file never stays readable under final_mode. */
+    if (result != MAELYS_SYS_OK) (void)fchmod(fd, 0600);
     if (FAULT("close") || maelys_sys_fd_close(&fd) != MAELYS_SYS_OK) {
         if (result == MAELYS_SYS_OK) {
             result = MAELYS_SYS_ERR_OS;
@@ -368,15 +369,22 @@ maelys_sys_result_t maelys_sys_file_write_exclusive(
 
 /* ---- publication ------------------------------------------------------- */
 
-static int rename_noreplace(const char *staging, const char *destination) {
+static int rename_noreplace_at(
+    int source_parent,
+    const char *source,
+    int destination_parent,
+    const char *destination) {
     if (FAULT("rename")) return -1;
 #if defined(__APPLE__)
-    return renamex_np(staging, destination, RENAME_EXCL);
+    return renameatx_np(
+        source_parent, source, destination_parent, destination, RENAME_EXCL);
 #elif defined(__linux__) && defined(SYS_renameat2)
-    return (int)syscall(SYS_renameat2, AT_FDCWD, staging, AT_FDCWD, destination,
-        (unsigned int)RENAME_NOREPLACE);
+    return (int)syscall(SYS_renameat2, source_parent, source,
+        destination_parent, destination, (unsigned int)RENAME_NOREPLACE);
 #else
-    (void)staging;
+    (void)source_parent;
+    (void)source;
+    (void)destination_parent;
     (void)destination;
     errno = ENOTSUP;
     return -1;
@@ -384,33 +392,77 @@ static int rename_noreplace(const char *staging, const char *destination) {
 }
 
 /*
- * The parent directory of a published name, followed through a final
- * symbolic link: a directory is not a trusted object here, and /tmp on
- * macOS is a link. Trailing separators do not count as a component.
+ * A path split into an opened parent directory and a last component. The
+ * parent is followed through a final symbolic link (a directory is not a
+ * trusted object here, and /tmp on macOS is a link) and anchored by its
+ * descriptor, so the rename and the sync that follow cannot be redirected
+ * by a later replacement of the path. Trailing separators do not count.
  */
-static maelys_sys_result_t sync_parent_of(const char *destination) {
-    char parent[PATH_MAX];
-    size_t end = strlen(destination);
-    while (end > 1u && destination[end - 1u] == '/') --end;
+typedef struct path_entry {
+    int parent_fd;
+    char *storage;
+    const char *name;
+} path_entry_t;
+
+static void path_entry_close(path_entry_t *entry) {
+    (void)maelys_sys_fd_close(&entry->parent_fd);
+    free(entry->storage);
+    entry->storage = NULL;
+    entry->name = NULL;
+}
+
+static maelys_sys_result_t path_entry_open(const char *path, path_entry_t *out) {
+    *out = (path_entry_t){.parent_fd = -1, .storage = NULL, .name = NULL};
+    size_t end = strlen(path);
+    while (end > 1u && path[end - 1u] == '/') --end;
+    if (end == 0u) return MAELYS_SYS_ERR_ARGUMENT;
+    char *storage = malloc(end + 1u);
+    if (!storage) return MAELYS_SYS_ERR_MEMORY;
+    memcpy(storage, path, end);
+    storage[end] = '\0';
     size_t slash = end;
-    while (slash > 0u && destination[slash - 1u] != '/') --slash;
-    size_t length;
+    while (slash > 0u && storage[slash - 1u] != '/') --slash;
+    const char *parent;
+    const char *name;
     if (slash == 0u) {
-        length = 1u;
-        parent[0] = '.';
+        parent = ".";
+        name = storage;
     } else if (slash == 1u) {
-        length = 1u;
-        parent[0] = '/';
+        parent = "/";
+        name = storage + 1u;
     } else {
-        length = slash - 1u;
-        if (length >= sizeof(parent)) {
-            errno = ENAMETOOLONG;
-            return MAELYS_SYS_ERR_OS;
-        }
-        memcpy(parent, destination, length);
+        storage[slash - 1u] = '\0';
+        parent = storage;
+        name = storage + slash;
     }
-    parent[length] = '\0';
-    return maelys_sys_directory_sync(parent);
+    if (!name[0]) {
+        free(storage);
+        return MAELYS_SYS_ERR_ARGUMENT;
+    }
+    if (FAULT_AT("open", parent)) {
+        free(storage);
+        return MAELYS_SYS_ERR_OS;
+    }
+    int fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOCTTY);
+    if (fd < 0) {
+        maelys_sys_result_t result =
+            errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
+        free(storage);
+        return result;
+    }
+    out->parent_fd = fd;
+    out->storage = storage;
+    out->name = name;
+    return MAELYS_SYS_OK;
+}
+
+static maelys_sys_result_t path_entry_stat(
+    const path_entry_t *entry, struct stat *out_status) {
+    if (FAULT("lstat") ||
+        fstatat(entry->parent_fd, entry->name, out_status, AT_SYMLINK_NOFOLLOW) != 0) {
+        return errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
+    }
+    return MAELYS_SYS_OK;
 }
 
 static maelys_sys_result_t publish(
@@ -419,39 +471,69 @@ static maelys_sys_result_t publish(
     const maelys_sys_publish_options_t *options,
     int directory) {
     if (!staging || !destination) return MAELYS_SYS_ERR_ARGUMENT;
+    path_entry_t source_entry;
+    path_entry_t destination_entry;
+    maelys_sys_result_t result = path_entry_open(staging, &source_entry);
+    if (result != MAELYS_SYS_OK) return result;
+    result = path_entry_open(destination, &destination_entry);
+    if (result != MAELYS_SYS_OK) {
+        int saved = errno;
+        path_entry_close(&source_entry);
+        errno = saved;
+        return result;
+    }
     struct stat source;
-    if (FAULT("lstat") || lstat(staging, &source) != 0) {
-        return errno == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
-    }
-    if (directory ? !S_ISDIR(source.st_mode) : !S_ISREG(source.st_mode)) {
-        return MAELYS_SYS_ERR_IDENTITY;
-    }
     struct stat target;
-    if (FAULT("lstat")) return MAELYS_SYS_ERR_OS;
-    if (lstat(destination, &target) == 0) {
-        /* The rename decides; this only settles the same-file case, which
-         * the two hosts answer differently. */
-        if (target.st_dev == source.st_dev && target.st_ino == source.st_ino) {
-            return MAELYS_SYS_ERR_EXISTS;
-        }
-    } else if (errno != ENOENT) {
-        return MAELYS_SYS_ERR_OS;
+    result = path_entry_stat(&source_entry, &source);
+    if (result != MAELYS_SYS_OK) goto done;
+    if (directory ? !S_ISDIR(source.st_mode) : !S_ISREG(source.st_mode)) {
+        result = MAELYS_SYS_ERR_IDENTITY;
+        goto done;
     }
-    if (rename_noreplace(staging, destination) != 0) {
+    /* The rename decides; this only settles the same-file case, which the
+     * two hosts answer differently. */
+    result = path_entry_stat(&destination_entry, &target);
+    if (result == MAELYS_SYS_OK) {
+        if (target.st_dev == source.st_dev && target.st_ino == source.st_ino) {
+            result = MAELYS_SYS_ERR_EXISTS;
+            goto done;
+        }
+    } else if (result != MAELYS_SYS_ERR_NOT_FOUND) {
+        goto done;
+    }
+    result = MAELYS_SYS_OK;
+    /* The type check above and this rename are two calls: an entry that
+     * replaces the staging between them is moved as it is. The contract
+     * names that window rather than hiding it. */
+    if (rename_noreplace_at(source_entry.parent_fd, source_entry.name,
+            destination_entry.parent_fd, destination_entry.name) != 0) {
         switch (errno) {
             case EEXIST:
             case ENOTEMPTY:
-                return MAELYS_SYS_ERR_EXISTS;
+                result = MAELYS_SYS_ERR_EXISTS;
+                break;
             case EINVAL:
             case ENOTSUP:
             case ENOSYS:
-                return MAELYS_SYS_ERR_UNSUPPORTED;
+                result = MAELYS_SYS_ERR_UNSUPPORTED;
+                break;
             default:
-                return MAELYS_SYS_ERR_OS;
+                result = MAELYS_SYS_ERR_OS;
+                break;
         }
+        goto done;
     }
-    if (options && options->sync_parent) return sync_parent_of(destination);
-    return MAELYS_SYS_OK;
+    if (options && options->sync_parent) {
+        result = sync_descriptor(destination_entry.parent_fd);
+    }
+done:
+    {
+        int saved = errno;
+        path_entry_close(&destination_entry);
+        path_entry_close(&source_entry);
+        errno = saved;
+    }
+    return result;
 }
 
 maelys_sys_result_t maelys_sys_file_publish_noreplace(

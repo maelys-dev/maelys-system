@@ -1,9 +1,11 @@
 /*
  * White-box fault injection for the file primitives: src/file.c is compiled
  * into this unit with a fault point before each system call the contracts
- * speak about, so each failure path is executed and its promise checked: nothing half-written
- * is left behind, nothing moved when a publication fails, no lock held
- * when the identity check after the lock fails.
+ * speak about, so each failure path is executed and its promise checked:
+ * nothing half-written is left behind and no replacement is deleted, nothing
+ * moved when a publication fails and its parent sync aims at the anchored
+ * destination directory, no lock held when the identity check after the
+ * lock fails.
  */
 #define MAELYS_SYS_FILE_TESTING 1
 #include "src/file.c"
@@ -27,6 +29,17 @@ static int fault_skip;
 static int (*fault_action)(void);
 /* The last path directory_sync was asked to open. */
 static char last_directory_opened[512];
+/* The identity of the last descriptor sync_descriptor was given. */
+static dev_t last_synced_dev;
+static ino_t last_synced_ino;
+
+static void file_sync_observed(int fd) {
+    struct stat status;
+    if (fstat(fd, &status) == 0) {
+        last_synced_dev = status.st_dev;
+        last_synced_ino = status.st_ino;
+    }
+}
 
 static int file_fault_at(const char *step, const char *path) {
     if (strcmp(step, "open") == 0) {
@@ -78,8 +91,21 @@ static void arm_sync(int error) {
 static char work[256];
 static char lock_path[512];
 static char replacement_path[512];
+static char publish_staging[512];
+static char publish_replacement[512];
+static char publish_parent_link[512];
+static char publish_parent_replacement[512];
 
 static int swap_written_file(void);
+static int swap_written_file_and_fail(void);
+
+static int replace_published_staging(void) {
+    return rename(publish_replacement, publish_staging) == 0 ? 0 : -1;
+}
+
+static int replace_publish_parent(void) {
+    return rename(publish_parent_replacement, publish_parent_link) == 0 ? 0 : -1;
+}
 
 static int join(const char *name, char *out, size_t capacity) {
     int written = snprintf(out, capacity, "%s/%s", work, name);
@@ -116,8 +142,17 @@ static int write_exclusive_failures(void) {
             maelys_sys_file_write_exclusive(path, "payload", 7u, 0644);
         CHECK(result == MAELYS_SYS_ERR_OS);
         CHECK(errno == faults[i].error);
-        /* Nothing half-written survives. */
-        CHECK(absent(path));
+        if (strcmp(faults[i].step, "fstat") == 0) {
+            /* No identity was captured: nothing is unlinked blind, the
+             * empty 0600 file stays for the caller. */
+            struct stat status;
+            CHECK(lstat(path, &status) == 0 && S_ISREG(status.st_mode));
+            CHECK(status.st_size == 0 && (status.st_mode & 0777) == 0600);
+            CHECK(unlink(path) == 0);
+        } else {
+            /* Nothing half-written survives. */
+            CHECK(absent(path));
+        }
     }
 #if defined(__APPLE__)
     /* F_FULLFSYNC refused: fsync(2) is the fallback and the write succeeds. */
@@ -162,7 +197,34 @@ static int write_exclusive_failures(void) {
         CHECK(lstat(target, &status) == 0 && status.st_size == 5);
         CHECK(unlink(target) == 0);
     }
+    /* The same swap while the write then fails: the removal is by identity
+     * and leaves the newcomer alone; the failure is still reported. */
+    CHECK(maelys_sys_file_write_exclusive(swapped_in, "other", 5u, 0600) == MAELYS_SYS_OK);
+    {
+        static char target[512];
+        CHECK(join("exclusive", target, sizeof(target)));
+        arm("fchmod", EPERM, 0);
+        fault_action = swap_written_file_and_fail;
+        errno = 0;
+        CHECK(maelys_sys_file_write_exclusive(target, "payload", 7u, 0644) ==
+            MAELYS_SYS_ERR_OS);
+        CHECK(errno == EPERM);
+        struct stat status;
+        CHECK(lstat(target, &status) == 0 && status.st_size == 5);
+        CHECK(unlink(target) == 0);
+    }
+    /* A retry after a failure on the same path is a fresh creation. */
+    arm("write", ENOSPC, 0);
+    CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_ERR_OS);
+    CHECK(maelys_sys_file_write_exclusive(path, "payload", 7u, 0644) == MAELYS_SYS_OK);
+    CHECK(unlink(path) == 0);
     return 0;
+}
+
+static int swap_written_file_and_fail(void) {
+    if (swap_written_file() != 0) return 1;
+    errno = EPERM;
+    return 1;
 }
 
 static int swap_written_file(void) {
@@ -200,13 +262,85 @@ static int publish_failures(void) {
     CHECK(result == MAELYS_SYS_ERR_OS && errno == EIO);
     CHECK(lstat(destination, &status) == 0 && absent(staging));
     CHECK(unlink(destination) == 0);
-    /* The parent that gets synced is the destination's directory, not the
-     * working directory nor the destination itself. */
-    CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
-    last_directory_opened[0] = '\0';
-    CHECK(maelys_sys_file_publish_noreplace(staging, destination, &options) == MAELYS_SYS_OK);
-    CHECK(strcmp(last_directory_opened, work) == 0);
+    /* The parent that gets synced is the destination's directory: not the
+     * staging's, which lives elsewhere here, nor the destination itself. */
+    {
+        char sub[512], sub_staging[512];
+        struct stat work_status, sub_status;
+        CHECK(join("stage-dir", sub, sizeof(sub)));
+        CHECK(mkdir(sub, 0700) == 0);
+        CHECK(snprintf(sub_staging, sizeof(sub_staging), "%s/stage", sub) > 0);
+        CHECK(maelys_sys_file_write_exclusive(sub_staging, "p", 1u, 0600) == MAELYS_SYS_OK);
+        last_synced_dev = 0;
+        last_synced_ino = 0;
+        CHECK(maelys_sys_file_publish_noreplace(sub_staging, destination, &options) ==
+            MAELYS_SYS_OK);
+        CHECK(stat(work, &work_status) == 0 && stat(sub, &sub_status) == 0);
+        CHECK(last_synced_dev == work_status.st_dev && last_synced_ino == work_status.st_ino);
+        CHECK(last_synced_ino != sub_status.st_ino);
+        CHECK(unlink(destination) == 0 && rmdir(sub) == 0);
+    }
+    /* Replacing a symbolic path to the destination parent after it was
+     * opened redirects neither the rename nor the requested parent sync. */
+    {
+        char first[512], second[512], through[512], first_final[512], second_final[512];
+        CHECK(join("publish-parent-a", first, sizeof(first)));
+        CHECK(join("publish-parent-b", second, sizeof(second)));
+        CHECK(join("publish-parent-link", publish_parent_link,
+            sizeof(publish_parent_link)));
+        CHECK(join("publish-parent-link-new", publish_parent_replacement,
+            sizeof(publish_parent_replacement)));
+        CHECK(mkdir(first, 0700) == 0 && mkdir(second, 0700) == 0);
+        CHECK(symlink(first, publish_parent_link) == 0);
+        CHECK(symlink(second, publish_parent_replacement) == 0);
+        CHECK(snprintf(through, sizeof(through), "%s/final", publish_parent_link) > 0);
+        CHECK(snprintf(first_final, sizeof(first_final), "%s/final", first) > 0);
+        CHECK(snprintf(second_final, sizeof(second_final), "%s/final", second) > 0);
+        CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
+        arm("rename", 0, 0);
+        fault_action = replace_publish_parent;
+        CHECK(maelys_sys_file_publish_noreplace(staging, through, &options) == MAELYS_SYS_OK);
+        CHECK(lstat(first_final, &status) == 0 && status.st_size == 1);
+        CHECK(absent(second_final) && absent(staging));
+        /* The replacement link now carries the link's name. */
+        CHECK(unlink(first_final) == 0 && unlink(publish_parent_link) == 0);
+        CHECK(rmdir(first) == 0 && rmdir(second) == 0);
+    }
+    /* The type check and the rename are two calls: what replaces the
+     * staging between them is moved as it is. The contract names it. */
+    CHECK(join("stage", publish_staging, sizeof(publish_staging)));
+    CHECK(join("stage-replacement", publish_replacement, sizeof(publish_replacement)));
+    CHECK(maelys_sys_file_write_exclusive(publish_staging, "p", 1u, 0600) == MAELYS_SYS_OK);
+    CHECK(symlink("replacement-target", publish_replacement) == 0);
+    arm("rename", 0, 0);
+    fault_action = replace_published_staging;
+    CHECK(maelys_sys_file_publish_noreplace(publish_staging, destination, NULL) ==
+        MAELYS_SYS_OK);
+    CHECK(lstat(destination, &status) == 0 && S_ISLNK(status.st_mode));
+    CHECK(absent(publish_staging) && absent(publish_replacement));
     CHECK(unlink(destination) == 0);
+    /* Paths without a last component are arguments, not lookups. */
+    CHECK(maelys_sys_file_publish_noreplace("", destination, NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_file_publish_noreplace("/", destination, NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_file_publish_noreplace(staging, "", NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    /* A missing parent of either side is not found. */
+    CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
+    {
+        char nowhere[512];
+        CHECK(join("missing-dir/final", nowhere, sizeof(nowhere)));
+        CHECK(maelys_sys_file_publish_noreplace(staging, nowhere, NULL) ==
+            MAELYS_SYS_ERR_NOT_FOUND);
+        CHECK(maelys_sys_file_publish_noreplace(nowhere, destination, NULL) ==
+            MAELYS_SYS_ERR_NOT_FOUND);
+        CHECK(lstat(staging, &status) == 0 && absent(destination));
+    }
+    /* The parent open fails as an OS error, source side then destination. */
+    arm("open", EACCES, 0);
+    CHECK(maelys_sys_file_publish_noreplace(staging, destination, NULL) == MAELYS_SYS_ERR_OS);
+    arm("open", EACCES, 1);
+    CHECK(maelys_sys_file_publish_noreplace(staging, destination, NULL) == MAELYS_SYS_ERR_OS);
+    CHECK(lstat(staging, &status) == 0 && absent(destination));
+    CHECK(unlink(staging) == 0);
     /* lstat of the staging fails as an OS error, not "not found". */
     CHECK(maelys_sys_file_write_exclusive(staging, "p", 1u, 0600) == MAELYS_SYS_OK);
     arm("lstat", EACCES, 0);
@@ -382,7 +516,7 @@ int main(void) {
     }
     if (failed) return 1;
     puts("ok - exclusive write fails clean at every step");
-    puts("ok - publication moves nothing on failure");
+    puts("ok - publication moves nothing on failure and syncs the anchored parent");
     puts("ok - lock holds nothing after a failed identity check");
     puts("ok - open, read and sync report their failing call");
     puts("ok - conditional removal names its window");

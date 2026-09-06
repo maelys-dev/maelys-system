@@ -119,7 +119,10 @@ run_mutant bounded-read-eintr-reported src/file.c \
 run_mutant lock-release-keeps-lock src/file.c \
     'if (flock(owned->fd, LOCK_UN) != 0) result = MAELYS_SYS_ERR_OS;' '(void)0;'
 run_mutant parent-sync-wrong-directory src/file.c \
-    'return maelys_sys_directory_sync(parent);' 'return maelys_sys_directory_sync(".");'
+    'result = sync_descriptor(destination_entry.parent_fd);' \
+    'result = sync_descriptor(source_entry.parent_fd);'
+run_mutant parent-sync-skipped src/file.c \
+    'result = sync_descriptor(destination_entry.parent_fd);' 'result = MAELYS_SYS_OK;'
 run_mutant_linux thread-name-not-truncated src/thread.c \
     '#define THREAD_NAME_LIMIT 15u' '#define THREAD_NAME_LIMIT 63u'
 run_mutant_linux condition-wall-clock src/thread.c \

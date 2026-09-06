@@ -68,6 +68,10 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_wait(
  * deadline or MAELYS_SYS_DEADLINE_INFINITE is accepted. For a non-empty
  * buffer, fd must be a socket in non-blocking mode and must remain so for the
  * duration of the call; blocking sockets are rejected with ERR_ARGUMENT.
+ * A peer's reset is ERR_RESET on both hosts, from this call as from
+ * send_nosigpipe, whichever reports it first (macOS shows a reset as HUP
+ * without WRITE and answers EPIPE to send; SO_ERROR is read to tell); once
+ * reported it is consumed and the socket is ERR_CLOSED thereafter.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send_all_until(
     int fd,

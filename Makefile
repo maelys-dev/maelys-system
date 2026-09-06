@@ -55,7 +55,8 @@ EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 
 .PHONY: all check test tests stress fault-check consumer-check clean header-check \
-	check-version audit asan ubsan asan-ubsan tsan analyze install release-check \
+	check-version include-precedence-check audit asan ubsan asan-ubsan tsan analyze \
+	install release-check \
 	install-check uninstall dist examples examples-check benchmark \
 	mutation-check package-release package-linux
 
@@ -63,7 +64,7 @@ all: $(LIB)
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(COMMON_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) -MMD -MP -c $< -o $@
 
 -include $(OBJECTS:.o=.d)
 
@@ -73,19 +74,19 @@ $(LIB): $(OBJECTS)
 
 $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BUILD)/examples/%: examples/%.c $(LIB)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(COMMON_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BENCHMARK): benchmarks/reactor_maelys.c $(LIB)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(COMMON_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(HEADER_CPP): tests/header_cpp.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CPPFLAGS) $(COMMON_CPPFLAGS) $(CXXFLAGS) $(COMMON_CXXFLAGS) $< -c -o $@.o
+	$(CXX) $(COMMON_CPPFLAGS) $(CPPFLAGS) $(CXXFLAGS) $(COMMON_CXXFLAGS) $< -c -o $@.o
 	$(CXX) $@.o $(LDFLAGS) -o $@
 
 $(PC): pkgconfig/maelys-sys.pc.in VERSION
@@ -120,6 +121,9 @@ header-check: $(HEADER_CPP)
 check-version:
 	@test "$(VERSION)" = "$$(sed -n 's/^#define MAELYS_SYS_VERSION "\([^"]*\)"/\1/p' include/maelys/sys/version.h)"
 
+include-precedence-check:
+	sh ./scripts/include-precedence-check.sh
+
 audit:
 	./scripts/audit-boundaries.sh
 
@@ -134,7 +138,7 @@ mutation-check:
 benchmark: $(BENCHMARK)
 	./scripts/run-benchmarks.sh $(BUILD)
 
-check: test header-check check-version audit examples-check
+check: test header-check check-version include-precedence-check audit examples-check
 
 # Everything RELEASING.md requires of a commit before it is tagged.
 release-check:
@@ -175,7 +179,7 @@ analyze:
 	for source in $(SOURCES); do \
 		$(CC) --analyze -Xanalyzer -analyzer-output=text \
 			-Xanalyzer -analyzer-werror $$disable \
-			$(CPPFLAGS) $(COMMON_CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
+			$(COMMON_CPPFLAGS) $(CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
 	done
 
 install: $(LIB) $(PC)

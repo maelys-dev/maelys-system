@@ -1,14 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 - 2026-09-06
 
-- Adopt maelys-release 0.14.2 (from 0.6.1): the declarations move from
-  `adapter/` to `dependencies/` (`dependencies/packages`; a consumer's pin
-  on this library is `dependencies/maelys-system.pin`), the managed texts
-  no longer carry the socle version, the attestation follows the
-  repository's visibility, and `check`, `preflight` and `rehearse` answer
-  as the socle the product pins wherever they are started from.
-  `rehearse DIR TARGET --check` replays `make check` on the Linux target.
+- From a cold audit of 0.9.0 and of an oci blind audit's notes on System.
+- Publication anchors both parent directories by descriptor, followed
+  through a final link and opened before the rename: renameat2 and
+  renameatx_np run through them, as does the parent sync, so a replacement
+  of either path after the open redirects nothing. The type check and the
+  rename stay two calls and the contract names that window; there are two
+  states after the call, a crash included. `""` and `"/"` are ERR_ARGUMENT.
+  A retry after a failed parent sync is ERR_NOT_FOUND, not ERR_EXISTS as
+  the contract said.
+- `write_exclusive` puts the inode back to 0600 before removing its failed
+  file with unlink_same; a failed initial fstat leaves the empty 0600 file
+  rather than unlink a path blind. A retry on the same path stays a fresh
+  creation.
+- `open_trusted` and `lock_acquire` open with O_NOCTTY: a terminal planted
+  at the path was acquired as controlling terminal before being refused.
+- A peer's reset seen from the sending side is ERR_RESET on both hosts, as
+  0.9.0 promised: macOS reports it as HUP without WRITE and answers EPIPE
+  to send, so SO_ERROR is read where Linux says ECONNRESET. Once reported,
+  the socket is ERR_CLOSED.
+- `accept` maps ECONNABORTED to ERR_WOULD_BLOCK: the pending connection
+  was aborted by its peer, the listener is fine. `fd_wait` no longer
+  reports a timeout after a slice of INT_MAX ms with the deadline ahead.
+- Checkout headers precede consumer `CPPFLAGS` in every rule, and `make
+  check` proves it by compiling against a poisoned include directory: an
+  installed copy of an older release could shadow the sources under test.
+- The timer model test draws past deadlines within the age of the
+  monotonic clock instead of failing on a host younger than 16 s.
+- Contracts written down: a step reporting STOPPED holds back its batch; a
+  dup left alive after unwatch on Linux makes a step spin until its
+  deadline. Mutation gate at 27, with the parent sync aimed at the wrong
+  directory or skipped both observed.
 
 ## 0.9.0 - 2026-09-05
 
