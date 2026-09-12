@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -12,7 +13,7 @@ jobs:
   # targets, sanitizers with clang, and the drift check of the managed
   # files from the socle release.yml pins. adopt keeps the socle line current.
   check:
-    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@1749a35778ed441a7f2b53cc2de0dbc51fb9708c # v0.14.2
+    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@29d8be42e552233a44115aee930af3fb6d4e966b # v0.41.0
     with:
       product: maelys-system
 

@@ -1,4 +1,11 @@
 <!-- maelys-release:begin -->
+<!-- SPDX-License-Identifier: CC-BY-4.0
+Copyright 2026 David Bromberg.
+Source: https://github.com/maelys-dev/maelys-release/blob/main/share/agents/instructions-block.md
+License: https://creativecommons.org/licenses/by/4.0/
+When sharing adaptations, retain attribution and indicate your changes.
+-->
+
 # Maelys release socle (maelys-release)
 
 This repository publishes through the shared maelys-release workflows. The
@@ -13,7 +20,8 @@ are in `docs/conventions.md` of maelys-release.
   wanted tag. `maelys-release check DIR` (exit 2 on any violation) verifies;
   `maelys-release preflight DIR` checks the tag preconditions before a
   release. The command follows agent-cli/v2: `--format json` everywhere,
-  `describe` for the catalog.
+  `describe` for the catalog, and `--field NAME` to read one member of the
+  result without a `jq` expression.
 - A dependency on another Maelys repository is `dependencies/<name>.pin` (tag on
   line 1, commit on line 2), cloned by `scripts/checkout-dependency.sh NAME`.
   The packages the build needs on the runners are listed in
@@ -25,7 +33,16 @@ are in `docs/conventions.md` of maelys-release.
 - A release is a signed, annotated tag `vX.Y.Z` on `main` whose commit
   carries `VERSION` = `X.Y.Z` and a dated `CHANGELOG.md` entry. Never push a
   tag before `make check` passes on that exact commit, never move or force a
-  tag, never publish from a branch.
+  tag, never publish from a branch. `maelys-release cut DIR X.Y.Z --apply`
+  does exactly that in two stops: it writes `VERSION`, commits it signed on
+  `release/vX.Y.Z`, opens the pull request and waits for its checks; after
+  the merge, `cut DIR X.Y.Z --tag --apply` signs the tag on the merge commit
+  those checks ran on. It never merges its own pull request.
+- A branch is named after the change it carries, with the prefix that
+  change would take in a commit message (`fix/`, `docs/`, `release/`…),
+  never after the tool that created it: a name says what changes, not who
+  typed. No list is closed; the commit prefixes this repository already
+  uses are its vocabulary.
 - The workflow verifies the tag through the GitHub API, builds on Linux
   x86_64, Linux arm64 and macOS arm64 with `scripts/package-release.sh
   TARGET`, attests provenance, publishes the GitHub release, renders
@@ -41,7 +58,19 @@ are in `docs/conventions.md` of maelys-release.
   GitHub-hosted runners only. A self-hosted runner is reserved for hardware
   gates, on signed tags or `workflow_dispatch`, behind the `release`
   environment.
-- A tag whose release exists but whose formula or bottles failed is
-  replayed with `gh workflow run release.yml -f tag=vX.Y.Z` after adopting
-  a corrected socle; a tag is never moved or recreated.
+- The prose of this repository lives in `maelys-dev/maelys-docs`, directory
+  `maelys-system/`, with a neighbouring checkout at `../maelys-docs`.
+  Documenting means opening a pull request there, not writing in `docs/`
+  here, which carries what a machine writes and what this repository engages
+  publicly. An agent that finds prose in `docs/` moves it rather than
+  enriching it, and `maelys-release migrate` moves it with its history.
+  **That repository is private: never name it from a public README.** The
+  reader of this block has access to it; the reader of a README may not.
+- A tag whose release or formula failed for a reason outside the code — a
+  cancelled job, an expired approval, a tap push lost to a race — is replayed
+  with `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`. **`--ref`
+  names the tag**: the `release` environment only accepts tags `v*`, so a run
+  started from the default branch is refused at `publish`. A replay runs the
+  socle that tag pinned; when the socle is at fault, the remedy is a new patch
+  release carrying the corrected pin. A tag is never moved or recreated.
 <!-- maelys-release:end -->

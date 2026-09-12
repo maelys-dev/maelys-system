@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- The Linux CI legs no longer fail on a broken third-party apt source of the
+  runner image: `apt-get update` warns and the install that follows decides.
+- Adopt maelys-release 0.41.0 (from 0.14.2). The socle's check matrix moved
+  to `ubuntu-26.04` in its 0.15.0, so the two Linux legs of the shared check
+  are renamed `check (ubuntu-26.04)` and `check (ubuntu-26.04-arm)`; the
+  branch protection of `main` required the former names and was updated in
+  the same move. A release replay now replays the release as well as the
+  Homebrew publication. The managed instruction blocks carry their CC-BY-4.0
+  attribution. This repository's own CI runs once per pull request again:
+  `push` names `main`, so a branch push no longer duplicates the run.
+
 ## 0.9.1 - 2026-09-06
 
 - From a cold audit of 0.9.0 and of an oci blind audit's notes on System.
