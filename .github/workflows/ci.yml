@@ -36,7 +36,7 @@ jobs:
             cxx: clang++
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build and test
         run: make clean check CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
       - name: Verify architecture
@@ -51,7 +51,7 @@ jobs:
         runner: [macos-15, macos-26]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require Apple Silicon
         run: test "$(uname -m)" = arm64
       - name: Build and test
@@ -62,7 +62,7 @@ jobs:
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: ASan and UBSan
         run: make asan-ubsan CC=clang CXX=clang++
       - name: TSan
@@ -73,7 +73,7 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Kill every listed mutant
         run: make mutation-check CC=clang CXX=clang++
 
@@ -82,7 +82,7 @@ jobs:
   macos-gates:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: ASan and UBSan
         run: make asan-ubsan CC=clang CXX=clang++
       - name: TSan
@@ -95,7 +95,7 @@ jobs:
   benchmark:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install optional comparison libraries
         run: |
           # A broken third-party apt source of the runner image must not fail an
@@ -104,7 +104,7 @@ jobs:
           sudo apt-get install -y libevent-dev libev-dev
       - name: Run informational benchmark
         run: BENCH_ITERATIONS=25000 make benchmark CC=clang
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: reactor-benchmark
           path: build/release/benchmarks/results.csv
@@ -116,7 +116,7 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Install RPM packaging tools
@@ -126,7 +126,7 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install decides"
           sudo apt-get install -y rpm
       - run: make check dist package-linux
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-packages-${{ runner.arch }}
           path: |
@@ -138,11 +138,11 @@ jobs:
   package-macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - run: make check dist package-release
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-packages-arm64
           path: |
