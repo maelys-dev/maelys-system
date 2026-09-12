@@ -1,6 +1,6 @@
 name: release
 
-# Managed by maelys-release v0.14.2 (0.14.2). Regenerate with
+# Managed by maelys-release untagged (0.39.0). Regenerate with
 # 'maelys-release adopt' of maelys-release; do not edit by hand.
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing signed tag whose Homebrew publication is replayed
+        description: Existing signed tag whose release and Homebrew publication are replayed
         required: true
         type: string
 
@@ -19,28 +19,28 @@ permissions:
 
 jobs:
   release:
-    if: github.event_name == 'push'
-    uses: maelys-dev/maelys-release/.github/workflows/release.yml@1749a35778ed441a7f2b53cc2de0dbc51fb9708c # v0.14.2
+    uses: maelys-dev/maelys-release/.github/workflows/release.yml@460dd8e26b598a36c6790a899e45bf0eb0652360 # untagged
     permissions:
       contents: write
       id-token: write
       attestations: write
     with:
       product: maelys-system
+      tag: ${{ inputs.tag || github.ref_name }}
       linux_packages: build-essential dpkg-dev file rpm python3
       macos_packages: python3
 
   tap-libmaelys-sys:
     needs: release
-    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
-    uses: maelys-dev/maelys-release/.github/workflows/tap.yml@1749a35778ed441a7f2b53cc2de0dbc51fb9708c # v0.14.2
+    if: needs.release.result == 'success'
+    uses: maelys-dev/maelys-release/.github/workflows/tap.yml@460dd8e26b598a36c6790a899e45bf0eb0652360 # untagged
     permissions:
       contents: write
       id-token: write
       attestations: write
     with:
       product: libmaelys-sys
-      tag: ${{ inputs.tag }}
+      tag: ${{ inputs.tag || github.ref_name }}
       bottles: '["macos-15","macos-26"]'
     secrets:
       tap_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
