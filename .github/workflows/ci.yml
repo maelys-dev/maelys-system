@@ -13,7 +13,7 @@ jobs:
   # targets, sanitizers with clang, and the drift check of the managed
   # files from the socle release.yml pins. adopt keeps the socle line current.
   check:
-    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@29d8be42e552233a44115aee930af3fb6d4e966b # v0.41.0
+    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@d8726f3833cdebdd159cfc5c3b28a04f04ae99d0 # v0.50.0
     with:
       product: maelys-system
 
@@ -59,12 +59,15 @@ jobs:
       - name: Install smoke test
         run: make install-check CC=clang
 
+  # ASan and UBSan are deliberately absent: the socle's shared check runs
+  # 'make asan-ubsan' on Linux with clang, and running it here as well built
+  # the same instrumented tree twice on every pull request. What is left is
+  # what the shared job does not cover. The job keeps its name, which a
+  # branch protection requires by.
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: ASan and UBSan
-        run: make asan-ubsan CC=clang CXX=clang++
       - name: TSan
         run: make tsan CC=clang CXX=clang++
       - name: Static analyzer
