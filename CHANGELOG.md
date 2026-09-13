@@ -4,7 +4,13 @@
 
 - The Linux CI legs no longer fail on a broken third-party apt source of the
   runner image: `apt-get update` warns and the install that follows decides.
-- Adopt maelys-release 0.41.0 (from 0.14.2). The socle's check matrix moved
+- A pull request builds each instrumented tree once. The socle's shared
+  check already runs `make asan-ubsan` on Linux with clang, and this
+  repository ran it again in its own `sanitizers` job. That job keeps its
+  name and its two remaining steps, TSan and the static analyzer, which the
+  shared job does not cover; the macOS gates keep their own sanitizers,
+  which no Linux job can run.
+- Adopt maelys-release 0.50.0 (from 0.14.2). The socle's check matrix moved
   to `ubuntu-26.04` in its 0.15.0, so the two Linux legs of the shared check
   are renamed `check (ubuntu-26.04)` and `check (ubuntu-26.04-arm)`; the
   branch protection of `main` required the former names and was updated in
