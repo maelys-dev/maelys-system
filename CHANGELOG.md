@@ -10,7 +10,7 @@
   name and its two remaining steps, TSan and the static analyzer, which the
   shared job does not cover; the macOS gates keep their own sanitizers,
   which no Linux job can run.
-- Adopt maelys-release 0.57.0 (from 0.14.2). The shared check's legs are
+- Adopt maelys-release 0.57.1 (from 0.14.2). The shared check's legs are
   named after what they check, no longer after a runner image:
   `check (linux)`, `check (linux-arm64)` and `check (macos)`, so an image
   upgrade never renames a check that the protection of `main` requires. The
