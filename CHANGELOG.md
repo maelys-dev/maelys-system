@@ -10,14 +10,18 @@
   name and its two remaining steps, TSan and the static analyzer, which the
   shared job does not cover; the macOS gates keep their own sanitizers,
   which no Linux job can run.
-- Adopt maelys-release 0.50.0 (from 0.14.2). The socle's check matrix moved
-  to `ubuntu-26.04` in its 0.15.0, so the two Linux legs of the shared check
-  are renamed `check (ubuntu-26.04)` and `check (ubuntu-26.04-arm)`; the
-  branch protection of `main` required the former names and was updated in
-  the same move. A release replay now replays the release as well as the
-  Homebrew publication. The managed instruction blocks carry their CC-BY-4.0
-  attribution. This repository's own CI runs once per pull request again:
-  `push` names `main`, so a branch push no longer duplicates the run.
+- Adopt maelys-release 0.57.0 (from 0.14.2). The shared check's legs are
+  named after what they check, no longer after a runner image:
+  `check (linux)`, `check (linux-arm64)` and `check (macos)`, so an image
+  upgrade never renames a check that the protection of `main` requires. The
+  former names, `check (ubuntu-26.04)`, `check (ubuntu-26.04-arm)` and
+  `check (macos-15)`, keep reporting as aliases during the transition, and
+  the protection moves from alias to leg in a single write once this is
+  merged, so `main` never requires less. A release replay replays the
+  release as well as the Homebrew publication, and the managed instruction
+  blocks carry their CC-BY-4.0 attribution. This repository's own CI runs
+  once per pull request: `push` names `main`, so a branch push no longer
+  duplicates the run.
 
 ## 0.9.1 - 2026-09-06
 
