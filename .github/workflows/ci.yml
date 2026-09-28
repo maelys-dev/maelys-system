@@ -13,7 +13,7 @@ jobs:
   # targets, sanitizers with clang, and the drift check of the managed
   # files from the socle release.yml pins. adopt keeps the socle line current.
   check:
-    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@ea1bd432bf607b84233475f17281c27b9175a457 # v0.59.1
+    uses: maelys-dev/maelys-release/.github/workflows/check-product.yml@137b83bee657babfbfaac796250c8818b4c69c41 # v0.62.1
     with:
       product: maelys-system
 

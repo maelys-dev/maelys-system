@@ -56,6 +56,11 @@ run_mutant_linux() {
     if test "$host" = Linux; then run_mutant "$@"; else printf '%s\n' "mutation skipped on $host: $1"; fi
 }
 
+# A fault only the macOS kernel makes observable.
+run_mutant_darwin() {
+    if test "$host" = Darwin; then run_mutant "$@"; else printf '%s\n' "mutation skipped on $host: $1"; fi
+}
+
 run_mutant stale-generation-increment src/loop.c \
     '++generation;' 'generation += 0u;'
 run_mutant stale-watch-accepted src/loop.c \
@@ -123,6 +128,29 @@ run_mutant parent-sync-wrong-directory src/file.c \
     'result = sync_descriptor(source_entry.parent_fd);'
 run_mutant parent-sync-skipped src/file.c \
     'result = sync_descriptor(destination_entry.parent_fd);' 'result = MAELYS_SYS_OK;'
+# Descriptor passing (0.10): what the two consumers' hand-written copies
+# got wrong or never checked, and what makes the hosts answer alike.
+run_mutant fdpass-surplus-left-open src/fdpass.c \
+    'close_received(descriptors + kept, count - kept);' '(void)0;'
+run_mutant fdpass-fcntl-failure-leaks src/fdpass.c \
+    '                close_received(descriptors, count);' '                (void)0;'
+run_mutant fdpass-peer-gone-reported-as-os-error src/fdpass.c \
+    '            return MAELYS_SYS_ERR_CLOSED;' '            return MAELYS_SYS_ERR_OS;'
+run_mutant fdpass-full-queue-reported-as-os-error src/fdpass.c \
+    '        case ENOBUFS:
+            return MAELYS_SYS_ERR_WOULD_BLOCK;' '        case ENOBUFS:
+            return MAELYS_SYS_ERR_OS;'
+run_mutant fdpass-socket-type-unchecked src/fdpass.c \
+    '        type != SOCK_DGRAM) {' '        0) {'
+run_mutant fdpass-cloexec-not-set src/fdpass.c \
+    'F_SETFD, flags | FD_CLOEXEC)' 'F_SETFD, flags)'
+run_mutant fdpass-empty-datagram-called-truncated src/fdpass.c \
+    '(!capacity && received > 0)' '(!capacity)'
+run_mutant_linux fdpass-receive-without-cmsg-cloexec src/fdpass.c \
+    '#define FDPASS_RECEIVE_FLAGS MSG_CMSG_CLOEXEC' '#define FDPASS_RECEIVE_FLAGS 0'
+run_mutant_darwin fdpass-control-read-past-copy src/fdpass.c \
+    'size_t available = announced < present ? announced : present;' \
+    'size_t available = announced + 0u * present;'
 run_mutant_linux thread-name-not-truncated src/thread.c \
     '#define THREAD_NAME_LIMIT 15u' '#define THREAD_NAME_LIMIT 63u'
 run_mutant_linux condition-wall-clock src/thread.c \

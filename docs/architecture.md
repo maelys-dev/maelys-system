@@ -16,7 +16,10 @@ ERROR contract as the hosts allow and asks the backends for exactly the
 caller's capacity so no watch starves. The 0.9 line names the frequent
 socket conditions (`ERR_RESET`, `ERR_WOULD_BLOCK`), adds a single-descriptor
 wait and a deadline-free condition wait, and moves the Linux wakeup to an
-eventfd; 0.9.1 anchors both parents of a publication by descriptor.
+eventfd; 0.9.1 anchors both parents of a publication by descriptor. The
+0.10 line adds descriptor passing over AF_UNIX datagrams, in a unit that
+stands alone so that a client linked into a confined process can compile it
+without linking the library.
 
 The reactor owns registrations and timer bookkeeping. It never
 owns watched descriptors and never runs domain callbacks. Egress and Orchestrator

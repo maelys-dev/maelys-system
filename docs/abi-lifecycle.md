@@ -27,6 +27,13 @@ never a field added to an existing one. A consumer compiled against an
 older header therefore never passes a shorter object. Result codes are
 appended, never reordered.
 
+`src/fdpass.c` and `include/maelys/sys/fdpass.h` are also committed as a
+unit that stands alone, within ABI 1: their paths are stable, the source
+names no other symbol of the library and needs no thread runtime, and it
+stays an object of its own in the archive. A consumer may compile it into
+an archive that does not link the library, as maelys-egress does for the
+client a confined process links. Removing that property is an ABI event.
+
 Private structure layout, backend implementation and test-only code are not
 ABI. Native descriptor integers are part of the explicitly POSIX contract.
 

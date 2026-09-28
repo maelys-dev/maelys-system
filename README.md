@@ -34,7 +34,9 @@ deadline, wakeup and SIGPIPE contracts, not a link-time consumer.
 ## Standalone surface
 
 The library has no mandatory dependency beyond the host POSIX C and threading
-runtime. Maelys Egress is a real pinned consumer. Complete generic examples cover
+runtime. Descriptor passing (`maelys/sys/fdpass.h`) needs neither: its one
+source file stands alone and may be compiled into an archive that does not
+link the library. Maelys Egress is a real pinned consumer. Complete generic examples cover
 a bounded TCP relay, one-shot timer service and cross-thread wakeup:
 
 ```sh
