@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- The archive member `fdpass.o` is part of the standalone contract, not only
+  the source file. maelys-egress extracts that member from an installed
+  `libmaelys_sys.a`, where no source is shipped, into the client archive a
+  confined process links. Its name, its being exactly one member and its
+  autonomy are now written into ABI 1, and `make check` and `make
+  install-check` read it from the built and from the installed archive:
+  exactly one member of that name, no undefined symbol of the library or of
+  the thread runtime, and a round trip linked against it alone. The check
+  used to read the object the build leaves beside the archive, which a
+  change of build could have made differ from what ships.
+
 ## 0.10.0 - 2026-09-28
 
 - Descriptor passing over AF_UNIX SOCK_DGRAM: `maelys_sys_fd_send` sends one

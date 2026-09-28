@@ -12,10 +12,11 @@
  * The object links by itself, without -pthread, on Linux and macOS, so a
  * consumer that must not link the library -- a client linked into a
  * confined process -- compiles src/fdpass.c from its pinned checkout into
- * its own archive. It stays an object of its own in libmaelys_sys.a and is
- * never merged into another: a binary that links such an archive and
- * libmaelys_sys.a of the same pin then sees no duplicate. Its path is
- * stable. The build links a test to this object alone and refuses any
+ * its own archive, or extracts the member fdpass.o from an installed
+ * libmaelys_sys.a, where no source is shipped. That member is exactly one,
+ * keeps its name and is never merged into another object: a binary that
+ * links such an archive and libmaelys_sys.a of the same pin then sees no
+ * duplicate. Its path is stable. The build links a test to this object alone and refuses any
  * undefined symbol of the library or of the thread runtime in it.
  */
 
