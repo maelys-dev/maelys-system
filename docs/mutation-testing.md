@@ -1,7 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies twenty-six one-line faults, two of them on Linux only, and
+directories, applies thirty-five one-line faults, three of them on Linux only
+and one on macOS only, and
 requires the existing tests to reject every mutant. Nine target the reactor:
 
 - generation increment removed;
@@ -42,6 +43,14 @@ lock; the parent sync of a publication aimed at the staging's directory
 instead of the destination's, or skipped; and, on Linux only, thread names
 not truncated to the host limit and conditions waiting on the wall clock
 instead of the monotonic one.
+
+Nine target descriptor passing (0.10): the surplus beyond the caller's
+capacity left open; the descriptors left open when setting close-on-exec
+fails; a peer gone, and a full queue, reported as an OS error rather than
+one code on both hosts; the socket type left unchecked; close-on-exec not
+set by the `fcntl` branch, or, on Linux only, not requested from the
+kernel; an empty datagram called truncated; and, on macOS only, the
+control data read past what the kernel copied.
 
 The sweep is deterministic and has a 60-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the

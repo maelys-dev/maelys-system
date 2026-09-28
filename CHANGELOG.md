@@ -1,7 +1,37 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-09-28
 
+- Descriptor passing over AF_UNIX SOCK_DGRAM: `maelys_sys_fd_send` sends one
+  datagram and at most one descriptor, `maelys_sys_fd_receive` receives one
+  datagram and every descriptor with it, in `maelys/sys/fdpass.h`. Asked by
+  maelys-egress, whose channel server and Warden's fd-4 broker and network
+  client each carried the same `sendmsg`/`recvmsg` by hand, and already
+  handled truncation differently. Measured on both hosts before the
+  contract was written:
+  - a peer gone or no longer reading is `ERR_CLOSED` on both, where Linux
+    says ECONNREFUSED or EPIPE and macOS ECONNRESET or EINVAL; a full peer
+    queue is `ERR_WOULD_BLOCK` on both, where Linux says EAGAIN and macOS
+    ENOBUFS, and the contract names that macOS never waits even on a
+    blocking socket;
+  - the receive buffer holds every descriptor a message can carry, 253 on
+    Linux and 254 on macOS: with a smaller one macOS installs the
+    descriptors anyway, where the caller cannot see them, and may announce
+    in `cmsg_len` more than it copied. The surplus beyond the caller's
+    capacity is closed here and flagged `SURPLUS`; truncated data and
+    control are flagged, never swallowed; each descriptor returned is
+    close-on-exec, and the contract names the window macOS leaves between
+    `recvmsg` and `fcntl`;
+  - macOS flags an empty datagram read into an empty vector as truncated; a
+    zero-capacity receive reads into one scratch byte instead.
+- `src/fdpass.c` stands alone, and that is part of ABI 1: it names no other
+  symbol of the library and needs no thread runtime, so a client linked into
+  a confined process compiles it from its pinned checkout without linking
+  the library. Its tests link the one object without the archive and
+  without `-pthread`, and `make check` refuses any undefined library or
+  thread symbol in it.
+- Mutation gate at thirty-five, nine of them on descriptor passing, one of
+  which only the macOS kernel makes observable.
 - The Linux CI legs no longer fail on a broken third-party apt source of the
   runner image: `apt-get update` warns and the install that follows decides.
 - A pull request builds each instrumented tree once. The socle's shared
@@ -10,18 +40,17 @@
   name and its two remaining steps, TSan and the static analyzer, which the
   shared job does not cover; the macOS gates keep their own sanitizers,
   which no Linux job can run.
-- Adopt maelys-release 0.59.1 (from 0.14.2). The shared check's legs are
-  named after what they check, no longer after a runner image:
-  `check (linux)`, `check (linux-arm64)` and `check (macos)`, so an image
-  upgrade never renames a check that the protection of `main` requires. The
-  former names, `check (ubuntu-26.04)`, `check (ubuntu-26.04-arm)` and
-  `check (macos-15)`, keep reporting as aliases during the transition, and
-  the protection moves from alias to leg in a single write once this is
-  merged, so `main` never requires less. A release replay replays the
-  release as well as the Homebrew publication, and the managed instruction
-  blocks carry their CC-BY-4.0 attribution. This repository's own CI runs
-  once per pull request: `push` names `main`, so a branch push no longer
-  duplicates the run.
+- Adopt maelys-release 0.62.1 (from 0.14.2). The shared check's legs are
+  named after what they check, `check (linux)`, `check (linux-arm64)` and
+  `check (macos)`, so an image upgrade never renames a check that the
+  protection of `main` requires. That protection moved to the new names with
+  every other setting kept, and the former names, served as aliases during
+  the move, are gone: three jobs fewer per pull request. A release replay
+  replays the release as well as the Homebrew publication, and the managed
+  instruction blocks carry their CC-BY-4.0 attribution and no longer name a
+  documentation repository. This repository's own CI runs once per pull
+  request: `push` names `main`, so a branch push no longer duplicates the
+  run.
 
 ## 0.9.1 - 2026-09-06
 

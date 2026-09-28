@@ -22,6 +22,9 @@ ifneq (,$(findstring clang,$(shell $(CC) --version 2>/dev/null)))
 COMMON_CPPFLAGS += -DMAELYS_SYS_STRICT_RESULTS
 endif
 COMMON_CFLAGS := -std=c11 $(WARNINGS) -pthread -fPIC
+# src/fdpass.c stands alone: its tests compile and link without -pthread
+# and without the archive, which is what proves it.
+STANDALONE_CFLAGS := -std=c11 $(WARNINGS) -fPIC
 TEST_CPPFLAGS = -DMAELYS_SYS_EXPECTED_VERSION='"$(VERSION)"'
 COMMON_CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic $(WERROR)
 
@@ -34,8 +37,8 @@ endif
 ifeq ($(UNAME_S),Darwin)
 PLATFORM_SOURCE := src/loop_kqueue.c
 endif
-SOURCES := src/result.c src/clock.c src/fd.c src/file.c src/socket.c src/wakeup.c \
-	src/thread.c src/loop.c src/loop_poll.c $(PLATFORM_SOURCE)
+SOURCES := src/result.c src/clock.c src/fd.c src/fdpass.c src/file.c src/socket.c \
+	src/wakeup.c src/thread.c src/loop.c src/loop_poll.c $(PLATFORM_SOURCE)
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES))
 LIB := $(BUILD)/lib/libmaelys_sys.a
 TEST := $(BUILD)/tests/test_sys
@@ -46,8 +49,11 @@ BACKEND_TEST := $(BUILD)/tests/test_backends
 INTERNAL_TEST := $(BUILD)/tests/test_internals
 FILE_TEST := $(BUILD)/tests/test_file
 FILE_FAULT_TEST := $(BUILD)/tests/test_file_faults
+FDPASS_OBJECT := $(BUILD)/src/fdpass.o
+FDPASS_TEST := $(BUILD)/tests/test_fdpass
+FDPASS_FAULT_TEST := $(BUILD)/tests/test_fdpass_faults
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
-	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST)
+	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_FAULT_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
@@ -55,7 +61,8 @@ EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 
 .PHONY: all check test tests stress fault-check consumer-check clean header-check \
-	check-version include-precedence-check audit asan ubsan asan-ubsan tsan analyze \
+	check-version include-precedence-check fdpass-standalone-check audit asan ubsan \
+	asan-ubsan tsan analyze \
 	install release-check \
 	install-check uninstall dist examples examples-check benchmark \
 	mutation-check package-release package-linux
@@ -75,6 +82,16 @@ $(LIB): $(OBJECTS)
 $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 	@mkdir -p $(@D)
 	$(CC) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+
+# The descriptor-passing tests link the one object, never the archive, and
+# never -pthread: a dependency creeping into src/fdpass.c fails here.
+$(FDPASS_TEST): tests/test_fdpass.c $(FDPASS_OBJECT)
+	@mkdir -p $(@D)
+	$(CC) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(STANDALONE_CFLAGS) $< $(FDPASS_OBJECT) $(LDFLAGS) -o $@
+
+$(FDPASS_FAULT_TEST): tests/test_fdpass_faults.c src/fdpass.c include/maelys/sys/fdpass.h
+	@mkdir -p $(@D)
+	$(CC) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(STANDALONE_CFLAGS) $< $(LDFLAGS) -o $@
 
 $(BUILD)/examples/%: examples/%.c $(LIB)
 	@mkdir -p $(@D)
@@ -105,6 +122,8 @@ test: $(TESTS)
 	$(INTERNAL_TEST)
 	$(FILE_TEST)
 	$(FILE_FAULT_TEST)
+	$(FDPASS_TEST)
+	$(FDPASS_FAULT_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)
@@ -138,7 +157,17 @@ mutation-check:
 benchmark: $(BENCHMARK)
 	./scripts/run-benchmarks.sh $(BUILD)
 
-check: test header-check check-version include-precedence-check audit examples-check
+# The object a consumer may compile into an archive that does not link the
+# library: nothing of maelys-system and no thread symbol may be undefined.
+fdpass-standalone-check: $(FDPASS_OBJECT)
+	@if nm -u $(FDPASS_OBJECT) | grep -E 'maelys_sys_|pthread_'; then \
+		echo 'src/fdpass.c must stand alone: no maelys_sys_ or pthread_ symbol'; \
+		exit 1; \
+	fi
+	@echo 'fdpass standalone check: ok'
+
+check: test header-check check-version include-precedence-check fdpass-standalone-check \
+	audit examples-check
 
 # Everything RELEASING.md requires of a commit before it is tagged.
 release-check:
