@@ -157,14 +157,13 @@ mutation-check:
 benchmark: $(BENCHMARK)
 	./scripts/run-benchmarks.sh $(BUILD)
 
-# The object a consumer may compile into an archive that does not link the
-# library: nothing of maelys-system and no thread symbol may be undefined.
-fdpass-standalone-check: $(FDPASS_OBJECT)
-	@if nm -u $(FDPASS_OBJECT) | grep -E 'maelys_sys_|pthread_'; then \
-		echo 'src/fdpass.c must stand alone: no maelys_sys_ or pthread_ symbol'; \
-		exit 1; \
-	fi
-	@echo 'fdpass standalone check: ok'
+# The member a consumer may extract from the archive, or compile from
+# src/fdpass.c, into an archive that does not link the library: read from the
+# archive itself, one member named fdpass.o, nothing of maelys-system and no
+# thread symbol undefined, a round trip linked against it alone.
+fdpass-standalone-check: $(LIB)
+	@CC='$(CC)' AR='$(AR)' CFLAGS='$(CFLAGS)' LDFLAGS='$(LDFLAGS)' \
+		sh ./scripts/fdpass-member-check.sh $(LIB)
 
 check: test header-check check-version include-precedence-check fdpass-standalone-check \
 	audit examples-check

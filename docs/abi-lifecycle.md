@@ -29,10 +29,17 @@ appended, never reordered.
 
 `src/fdpass.c` and `include/maelys/sys/fdpass.h` are also committed as a
 unit that stands alone, within ABI 1: their paths are stable, the source
-names no other symbol of the library and needs no thread runtime, and it
-stays an object of its own in the archive. A consumer may compile it into
-an archive that does not link the library, as maelys-egress does for the
-client a confined process links. Removing that property is an ABI event.
+names no other symbol of the library and needs no thread runtime, and
+`libmaelys_sys.a` carries it as exactly one member named `fdpass.o`. A
+consumer may compile the source, or extract that member with `ar x` from an
+installed archive where no source is shipped, into an archive that does not
+link the library. maelys-egress does the latter for the client a confined
+process links, from a Homebrew install. The member's name, its being a
+member of its own and its autonomy are all part of ABI 1: removing or
+renaming it, or merging it into another object, is an ABI event. `make
+check` and `make install-check` read the member from the built and from the
+installed archive, refuse any undefined symbol of the library or of the
+thread runtime, and link a round trip against it alone.
 
 Private structure layout, backend implementation and test-only code are not
 ABI. Native descriptor integers are part of the explicitly POSIX contract.

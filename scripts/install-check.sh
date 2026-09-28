@@ -12,6 +12,10 @@ test -f "$root/usr/lib/libmaelys_sys.a"
 test -f "$root/usr/include/maelys/sys.h"
 test -f "$root/usr/include/maelys/sys/loop.h"
 test -f "$root/usr/lib/pkgconfig/maelys-sys.pc"
+test -f "$root/usr/include/maelys/sys/fdpass.h"
+# What a consumer extracts from an installed archive, read from that archive.
+FDPASS_INCLUDE="$root/usr/include" sh "$(dirname "$0")/fdpass-member-check.sh" \
+    "$root/usr/lib/libmaelys_sys.a"
 
 cat > "$root/smoke.c" <<'EOF'
 #include <maelys/sys.h>
