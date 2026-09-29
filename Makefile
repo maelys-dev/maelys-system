@@ -52,8 +52,9 @@ FILE_FAULT_TEST := $(BUILD)/tests/test_file_faults
 FDPASS_OBJECT := $(BUILD)/src/fdpass.o
 FDPASS_TEST := $(BUILD)/tests/test_fdpass
 FDPASS_FAULT_TEST := $(BUILD)/tests/test_fdpass_faults
+SOCKET_RIGHTS_TEST := $(BUILD)/tests/test_socket_rights
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
-	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_FAULT_TEST)
+	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
@@ -124,6 +125,7 @@ test: $(TESTS)
 	$(FILE_FAULT_TEST)
 	$(FDPASS_TEST)
 	$(FDPASS_FAULT_TEST)
+	$(SOCKET_RIGHTS_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

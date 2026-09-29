@@ -18,6 +18,12 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+/* Private entry used by socket.c. Keep the declaration here so this source
+ * still compiles with only the public headers; the white-box test includes
+ * fdpass_internal.h as well and checks that the declarations agree. */
+maelys_sys_result_t maelys_sys_unix_receive_bytes(
+    int socket_fd, void *buffer, size_t capacity, size_t *out_received);
+
 #ifndef MSG_NOSIGNAL
 #error "MSG_NOSIGNAL is required"
 #endif
@@ -134,7 +140,7 @@ static void close_received(const int *received, size_t count) {
     for (size_t index = 0; index < count; ++index) (void)close(received[index]);
 }
 
-maelys_sys_result_t maelys_sys_fd_receive(
+static maelys_sys_result_t receive_message(
     int socket_fd,
     void *buffer,
     size_t capacity,
@@ -142,7 +148,10 @@ maelys_sys_result_t maelys_sys_fd_receive(
     int *out_fds,
     size_t fd_capacity,
     size_t *out_fd_count,
-    unsigned *out_flags) {
+    unsigned *out_flags,
+    int stream,
+    int *out_control) {
+    *out_control = 0;
     if (out_received) *out_received = 0;
     if (out_fd_count) *out_fd_count = 0;
     if (out_flags) *out_flags = 0;
@@ -153,9 +162,6 @@ maelys_sys_result_t maelys_sys_fd_receive(
         (!buffer && capacity) || (!out_fds && fd_capacity)) {
         return MAELYS_SYS_ERR_ARGUMENT;
     }
-    maelys_sys_result_t checked = check_socket(socket_fd);
-    if (checked != MAELYS_SYS_OK) return checked;
-
     /* macOS flags MSG_TRUNC on an empty datagram read into an empty vector,
      * where Linux does not: a zero capacity reads into one scratch byte, so
      * an empty datagram is never called truncated. */
@@ -165,7 +171,9 @@ maelys_sys_result_t maelys_sys_fd_receive(
     iov.iov_len = capacity ? capacity : 1u;
     union {
         struct cmsghdr header;
-        unsigned char space[CMSG_SPACE(sizeof(int) * MAELYS_SYS_FDPASS_CONTROL_FDS)];
+        /* Stream receives also leave room for kernel ancillary data (in
+         * particular Linux SO_PASSCRED alongside the maximum rights). */
+        unsigned char space[CMSG_SPACE(sizeof(int) * MAELYS_SYS_FDPASS_CONTROL_FDS) + 256];
     } control;
     memset(&control, 0, sizeof(control));
     struct msghdr message;
@@ -173,13 +181,16 @@ maelys_sys_result_t maelys_sys_fd_receive(
     message.msg_iov = &iov;
     message.msg_iovlen = 1;
     message.msg_control = control.space;
-    message.msg_controllen = sizeof(control.space);
+    message.msg_controllen = (socklen_t)(stream ? sizeof(control.space) :
+        CMSG_SPACE(sizeof(int) * MAELYS_SYS_FDPASS_CONTROL_FDS));
     ssize_t received;
     do {
         received = recvmsg(socket_fd, &message, FDPASS_RECEIVE_FLAGS);
     } while (received < 0 && errno == EINTR);
     if (received < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
+        if (stream && errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
+        if (stream && errno == ECONNRESET) return MAELYS_SYS_ERR_RESET;
         return MAELYS_SYS_ERR_OS;
     }
 
@@ -209,6 +220,10 @@ maelys_sys_result_t maelys_sys_fd_receive(
         }
     }
 
+    /* Linux may attach credentials even to EOF with SO_PASSCRED enabled.
+     * Only rights (including truncated rights) make a zero-byte receive
+     * something other than EOF here, not the presence of any control. */
+    *out_control = count != 0 || (message.msg_flags & MSG_CTRUNC) != 0;
     if (FDPASS_NEEDS_FCNTL) {
         for (size_t index = 0; index < count; ++index) {
             int flags = FDPASS_FAULT("fcntl") ? -1 : fcntl(descriptors[index], F_GETFD);
@@ -237,4 +252,44 @@ maelys_sys_result_t maelys_sys_fd_receive(
     *out_fd_count = kept;
     *out_flags = flags;
     return MAELYS_SYS_OK;
+}
+
+maelys_sys_result_t maelys_sys_fd_receive(
+    int socket_fd, void *buffer, size_t capacity, size_t *out_received,
+    int *out_fds, size_t fd_capacity, size_t *out_fd_count, unsigned *out_flags) {
+    if (out_received) *out_received = 0;
+    if (out_fd_count) *out_fd_count = 0;
+    if (out_flags) *out_flags = 0;
+    if (out_fds) {
+        for (size_t i = 0; i < fd_capacity; ++i) out_fds[i] = -1;
+    }
+    maelys_sys_result_t checked = check_socket(socket_fd);
+    if (checked != MAELYS_SYS_OK) return checked;
+    int control = 0;
+    return receive_message(socket_fd, buffer, capacity, out_received, out_fds,
+                           fd_capacity, out_fd_count, out_flags, 0, &control);
+}
+
+maelys_sys_result_t maelys_sys_unix_receive_bytes(
+    int socket_fd, void *buffer, size_t capacity, size_t *out_received) {
+    /* A control-only record is not EOF on macOS. Read again, but bound the
+     * work so a peer continuously supplying such records cannot monopolise
+     * an event-loop thread. This is an error, not a false EOF/WouldBlock. */
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
+        size_t fd_count = 0;
+        unsigned flags = 0;
+        int control = 0;
+        maelys_sys_result_t result = receive_message(socket_fd, buffer, capacity,
+            out_received, NULL, 0, &fd_count, &flags, 1, &control);
+        if (result != MAELYS_SYS_OK) return result;
+        if (flags & MAELYS_SYS_FDPASS_CONTROL_TRUNCATED) {
+            errno = EMSGSIZE;
+            *out_received = 0;
+            return MAELYS_SYS_ERR_OS;
+        }
+        if (*out_received) return MAELYS_SYS_OK;
+        if (!control) return MAELYS_SYS_ERR_CLOSED;
+    }
+    errno = EPROTO;
+    return MAELYS_SYS_ERR_OS;
 }

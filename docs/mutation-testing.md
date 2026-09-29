@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies thirty-five one-line faults, three of them on Linux only
-and one on macOS only, and
+directories, applies thirty-seven one-line faults, three of them on Linux only
+and three on macOS only, and
 requires the existing tests to reject every mutant. Nine target the reactor:
 
 - generation increment removed;
@@ -51,6 +51,11 @@ one code on both hosts; the socket type left unchecked; close-on-exec not
 set by the `fcntl` branch, or, on Linux only, not requested from the
 kernel; an empty datagram called truncated; and, on macOS only, the
 control data read past what the kernel copied.
+
+Two more target byte-only Unix receives on macOS (0.10.1): bypassing control
+cleanup and treating a control-only record as EOF. The Linux kernel does not
+expose these two faults; both hosts run the descriptor-count regression,
+including Linux SO_PASSCRED at EOF.
 
 The sweep is deterministic and has a 60-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the

@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 - 2026-09-29
 
+- Security: byte-only AF_UNIX socket receives now consume control data and
+  close attached descriptors. macOS installs SCM_RIGHTS even when recv(2)
+  ignores them; an untrusted local peer could exhaust a server's descriptors.
+  Created and accepted sockets share fdpass's cleanup, including short
+  reads, adjacent rights-bearing writes and Linux SO_PASSCRED. Control-only
+  records are not EOF; draining them is bounded to protect the event loop.
+  No public function or ABI number changes. Statically linked consumers
+  must rebuild to receive the fix.
 - The archive member `fdpass.o` is part of the standalone contract, not only
   the source file. maelys-egress extracts that member from an installed
   `libmaelys_sys.a`, where no source is shipped, into the client archive a

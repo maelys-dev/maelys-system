@@ -17,6 +17,7 @@
 #define MAELYS_SYS_FDPASS_TESTING 1
 #define MAELYS_SYS_FDPASS_CONTROL_FDS 1
 #define MAELYS_SYS_FDPASS_FORCE_FCNTL 1
+#include "src/fdpass_internal.h"
 #include "src/fdpass.c"
 
 #include <stdio.h>
