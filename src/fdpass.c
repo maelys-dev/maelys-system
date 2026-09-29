@@ -349,7 +349,10 @@ maelys_sys_result_t maelys_sys_fd_stream_receive(
     if (out_fd_count) *out_fd_count = 0;
     if (out_flags) *out_flags = 0;
     if (out_fds) for (size_t i = 0; i < fd_capacity; ++i) out_fds[i] = -1;
-    if (!capacity || capacity > (size_t)SSIZE_MAX) return MAELYS_SYS_ERR_ARGUMENT;
+    if (!out_received || !out_fd_count || !out_flags || !buffer ||
+        (!out_fds && fd_capacity) || !capacity || capacity > (size_t)SSIZE_MAX) {
+        return MAELYS_SYS_ERR_ARGUMENT;
+    }
     maelys_sys_result_t checked = check_stream(socket_fd);
     if (checked != MAELYS_SYS_OK) return checked;
     int control = 0;

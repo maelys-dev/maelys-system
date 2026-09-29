@@ -75,6 +75,10 @@ static int round_trip_and_arguments(void) {
     CHECK(maelys_sys_fd_stream_send(pair[0], "x", 1, -1, NULL) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 0, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_fd_stream_receive(pair[1], NULL, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, NULL, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, NULL, &flags) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, NULL, 1, &count, &flags) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_WOULD_BLOCK);
     CHECK(received == 0 && fd == -1 && count == 0 && flags == 0);
     CHECK(maelys_sys_fd_stream_send(pair[0], "ab", 2, source, &sent) == MAELYS_SYS_OK && sent == 2);
