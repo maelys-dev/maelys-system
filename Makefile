@@ -51,10 +51,11 @@ FILE_TEST := $(BUILD)/tests/test_file
 FILE_FAULT_TEST := $(BUILD)/tests/test_file_faults
 FDPASS_OBJECT := $(BUILD)/src/fdpass.o
 FDPASS_TEST := $(BUILD)/tests/test_fdpass
+FDPASS_STREAM_TEST := $(BUILD)/tests/test_fdpass_stream
 FDPASS_FAULT_TEST := $(BUILD)/tests/test_fdpass_faults
 SOCKET_RIGHTS_TEST := $(BUILD)/tests/test_socket_rights
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
-	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST)
+	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
@@ -86,7 +87,7 @@ $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 
 # The descriptor-passing tests link the one object, never the archive, and
 # never -pthread: a dependency creeping into src/fdpass.c fails here.
-$(FDPASS_TEST): tests/test_fdpass.c $(FDPASS_OBJECT)
+$(FDPASS_TEST) $(FDPASS_STREAM_TEST): $(BUILD)/tests/%: tests/%.c $(FDPASS_OBJECT)
 	@mkdir -p $(@D)
 	$(CC) $(COMMON_CPPFLAGS) $(TEST_CPPFLAGS) $(CPPFLAGS) $(CFLAGS) $(STANDALONE_CFLAGS) $< $(FDPASS_OBJECT) $(LDFLAGS) -o $@
 
@@ -124,6 +125,7 @@ test: $(TESTS)
 	$(FILE_TEST)
 	$(FILE_FAULT_TEST)
 	$(FDPASS_TEST)
+	$(FDPASS_STREAM_TEST)
 	$(FDPASS_FAULT_TEST)
 	$(SOCKET_RIGHTS_TEST)
 

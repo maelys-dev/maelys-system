@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0 - 2026-09-29
+
+- Add partial `maelys_sys_fd_stream_send` and `maelys_sys_fd_stream_receive`
+  operations in the existing standalone `fdpass.o`, with no ABI bump. They
+  require an already-nonblocking Unix stream socket, report byte progress and
+  leave framing, deadlines and retries to the consumer. Positive send progress
+  queues the descriptor once; a retry of the remainder must not attach it
+  again. Empty rights-bearing sends are refused. Receives close surplus
+  descriptors, preserve control-only delivery, set CLOEXEC, and flag unexpected
+  ancillary data. EINTR is exposed with zero progress rather than hiding an
+  unbounded retry inside an operation.
+- Measure macOS near-full queues, not only full ones: a 16-byte payload with
+  rights and 16--31 freed bytes can block in blocking mode, while nonblocking
+  mode reports EAGAIN; with less control space macOS reports EMSGSIZE. The
+  stream API treats that rights-specific pressure as WOULD_BLOCK, not other
+  uses of EMSGSIZE. Linux SO_PASSCRED can attach credentials to EOF; zero
+  bytes without rights still ends the stream.
+- Standalone tests cover fragmented and adjacent transfers, partial sends,
+  full and near-full queues, zero-byte rights, maximum descriptor surplus,
+  credentials, EOF, SIGPIPE, interrupts and fcntl-failure cleanup. Five new
+  mutants hold the additive stream contract; datagram semantics are unchanged.
+
 ## 0.10.1 - 2026-09-29
 
 - Security: byte-only AF_UNIX socket receives now consume control data and
