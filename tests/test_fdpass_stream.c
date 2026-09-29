@@ -124,6 +124,21 @@ static int flood_and_control_only(int credentials) {
         if (round) { CHECK(fcntl(fd, F_GETFD) & FD_CLOEXEC); CHECK(close(fd) == 0); }
         CHECK(open_count() == baseline);
     }
+    /* Adjacent maximum-sized rights records must not overflow the control
+     * buffer when the byte buffer can span both records. */
+    CHECK(raw_rights(pair[0], source, 5) == 0);
+    CHECK(raw_rights(pair[0], source, 5) == 0);
+    size_t remaining = 10;
+    while (remaining) {
+        char bytes[10]; size_t received = 0, count = 0; unsigned flags = 0;
+        CHECK(maelys_sys_fd_stream_receive(pair[1], bytes, remaining, &received,
+              NULL, 0, &count, &flags) == MAELYS_SYS_OK);
+        CHECK(received > 0 && received <= remaining && count == 0);
+        CHECK((flags & MAELYS_SYS_FDPASS_SURPLUS) &&
+              !(flags & MAELYS_SYS_FDPASS_CONTROL_TRUNCATED));
+        CHECK(open_count() == baseline);
+        remaining -= received;
+    }
 #ifdef __APPLE__
     CHECK(raw_rights(pair[0], source, 0) == 0);
     char byte; size_t received = 99, count = 99; unsigned flags = 99;

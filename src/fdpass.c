@@ -308,7 +308,7 @@ static maelys_sys_result_t check_stream(int socket_fd) {
     if (socket_fd < 0) return MAELYS_SYS_ERR_ARGUMENT;
     int type = 0;
     socklen_t length = (socklen_t)sizeof(type);
-    struct sockaddr_storage address;
+    struct sockaddr_storage address = {0};
     socklen_t address_length = (socklen_t)sizeof(address);
     int flags = fcntl(socket_fd, F_GETFL);
     if (flags < 0 || !(flags & O_NONBLOCK) ||
