@@ -17,12 +17,33 @@ IOCP and WFP are separate product work and are not 0.x goals.
 
 A primitive enters this repository only when:
 
-1. at least two real Maelys consumers need it;
+1. at least two real Maelys consumers need it, or it is a transport variant
+   of an already admitted primitive under the narrow exception below;
 2. it knows no domain type;
 3. it adds no external dependency;
-4. Linux and macOS expose the same observable semantics;
+4. Linux and macOS expose the same contracted ownership, safety and progress
+   invariants; unavoidable native differences are measured, explicitly
+   bounded in the contract and tested on both hosts, not silently equated;
 5. it is testable without MCP, Sandbox or Executor; and
 6. adversarial failure-path tests ship with the primitive.
+
+A transport variant may have one direct product consumer only when its
+contract carries measured differences between the supported kernels that
+the consumer cannot safely reproduce without reopening its boundary audit.
+The admission names that real consumer, the existing primitive, the measured
+differences and the shared implementation and tests. It does not admit new
+protocols, framing, deadline policy or a generic component on the strength of
+hypothetical future consumers.
+
+Unix stream descriptor passing is such a variant of the admitted datagram
+`fdpass` primitive: Egress's pathname bootstrap is the direct consumer.
+Warden's inherited channel descriptor is not a second bootstrap consumer.
+macOS control-only delivery and descriptor installation, Linux ancillary
+credentials at EOF, short transfers and full/near-full queues require one
+control-aware implementation in the existing standalone `fdpass.o`.
+System exposes byte/descriptor progress; the consumer owns frame boundaries,
+timeouts and retry policy. This admission is not itself a new API or a change
+to the existing datagram contract.
 
 JSON, HTTP, TLS, policy, MIR, process launchers, sandbox backends and business
 receipts are intentionally excluded. SHA-256 is shared code, not a system
