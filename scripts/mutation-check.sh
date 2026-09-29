@@ -157,7 +157,7 @@ run_mutant_darwin unix-byte-receive-ignores-rights src/socket.c \
     'if (socket_handle->domain == AF_UNIX) {' 'if (0) {'
 run_mutant_darwin unix-control-only-is-eof src/fdpass.c \
     'if (!control) return MAELYS_SYS_ERR_CLOSED;' \
-    'if (control || !control) return MAELYS_SYS_ERR_CLOSED;'
+    'if (1) return MAELYS_SYS_ERR_CLOSED;'
 run_mutant_linux condition-wall-clock src/thread.c \
     'status = pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);' 'status = 0;'
 
