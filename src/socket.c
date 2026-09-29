@@ -5,6 +5,7 @@
 #include "maelys/sys/socket.h"
 
 #include "maelys/sys/fd.h"
+#include "fdpass_internal.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -14,6 +15,7 @@
 
 struct maelys_sys_socket {
     int fd;
+    int domain;
     int connect_started;
     int connect_complete;
     int connect_error;
@@ -45,6 +47,7 @@ static maelys_sys_result_t protect_socket(int fd) {
 
 static maelys_sys_result_t wrap_socket(
     int fd,
+    int domain,
     int already_nonblocking_cloexec,
     maelys_sys_socket_t **out_socket) {
     maelys_sys_socket_t *socket_handle;
@@ -67,6 +70,7 @@ static maelys_sys_result_t wrap_socket(
     socket_handle = calloc(1u, sizeof(*socket_handle));
     if (!socket_handle) return MAELYS_SYS_ERR_MEMORY;
     socket_handle->fd = fd;
+    socket_handle->domain = domain;
     *out_socket = socket_handle;
     return MAELYS_SYS_OK;
 }
@@ -94,7 +98,7 @@ maelys_sys_result_t maelys_sys_socket_create(
         fd = socket(domain, type, protocol);
         if (fd < 0) return MAELYS_SYS_ERR_OS;
     }
-    result = wrap_socket(fd, atomic_flags != 0, out_socket);
+    result = wrap_socket(fd, domain, atomic_flags != 0, out_socket);
     if (result == MAELYS_SYS_OK) return result;
     saved = errno;
     (void)close(fd);
@@ -190,6 +194,9 @@ maelys_sys_result_t maelys_sys_socket_receive(
     if (!socket_handle || socket_handle->fd < 0 || !buffer || !capacity ||
         !out_received) {
         return MAELYS_SYS_ERR_ARGUMENT;
+    }
+    if (socket_handle->domain == AF_UNIX) {
+        return maelys_sys_unix_receive_bytes(socket_handle->fd, buffer, capacity, out_received);
     }
     do {
         received = recv(socket_handle->fd, buffer, capacity, 0);
@@ -319,7 +326,7 @@ maelys_sys_result_t maelys_sys_socket_accept(
         } while (fd < 0 && errno == EINTR);
         if (fd < 0) return accept_failure();
     }
-    result = wrap_socket(fd, atomic_flags != 0, out_socket);
+    result = wrap_socket(fd, listener->domain, atomic_flags != 0, out_socket);
     if (result == MAELYS_SYS_OK) return result;
     saved = errno;
     (void)close(fd);

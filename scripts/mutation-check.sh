@@ -153,6 +153,11 @@ run_mutant_darwin fdpass-control-read-past-copy src/fdpass.c \
     'size_t available = announced + 0u * present;'
 run_mutant_linux thread-name-not-truncated src/thread.c \
     '#define THREAD_NAME_LIMIT 15u' '#define THREAD_NAME_LIMIT 63u'
+run_mutant_darwin unix-byte-receive-ignores-rights src/socket.c \
+    'if (socket_handle->domain == AF_UNIX) {' 'if (0) {'
+run_mutant_darwin unix-control-only-is-eof src/fdpass.c \
+    'if (!control) return MAELYS_SYS_ERR_CLOSED;' \
+    'if (control || !control) return MAELYS_SYS_ERR_CLOSED;'
 run_mutant_linux condition-wall-clock src/thread.c \
     'status = pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);' 'status = 0;'
 

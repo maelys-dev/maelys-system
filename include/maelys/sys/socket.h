@@ -61,6 +61,13 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_complete(
  * peer's reset (ECONNRESET) and never an end of stream: a body delimited by
  * the close is incomplete. Accept without a pending connection is
  * ERR_WOULD_BLOCK as well. Send never raises SIGPIPE.
+ *
+ * AF_UNIX receives consume ancillary data and close every received
+ * descriptor; this byte-only API never transfers descriptor ownership.
+ * Control-only records (possible on macOS) are not EOF. Up to sixteen are
+ * discarded per call before ERR_OS/EPROTO is returned, bounding work on a
+ * hostile stream. Control truncation is ERR_OS/EMSGSIZE, never a successful
+ * byte receive. On either error the consumed bytes are not recoverable.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_receive(
     maelys_sys_socket_t *socket_handle,
