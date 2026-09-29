@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 - 2026-09-29
 
 - Security: byte-only AF_UNIX socket receives now consume control data and
   close attached descriptors. macOS installs SCM_RIGHTS even when recv(2)
