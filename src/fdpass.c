@@ -1,5 +1,5 @@
 /*
- * Descriptor passing over AF_UNIX SOCK_DGRAM. This unit stands alone: it
+ * Descriptor passing over AF_UNIX SOCK_DGRAM and SOCK_STREAM. This unit stands alone: it
  * includes its public header and the C library, and calls nothing else of
  * maelys-system, so a consumer can compile it from this path into an
  * archive that does not link the library (see maelys/sys/fdpass.h).
@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -96,16 +97,11 @@ static maelys_sys_result_t send_failure(int error) {
     }
 }
 
-maelys_sys_result_t maelys_sys_fd_send(
+static ssize_t send_message(
     int socket_fd,
     const void *bytes,
     size_t length,
-    int passed_fd) {
-    if ((!bytes && length) || passed_fd < -1) return MAELYS_SYS_ERR_ARGUMENT;
-    maelys_sys_result_t checked = check_socket(socket_fd);
-    if (checked != MAELYS_SYS_OK) return checked;
-    if (passed_fd >= 0 && fcntl(passed_fd, F_GETFD) < 0) return MAELYS_SYS_ERR_ARGUMENT;
-
+    int passed_fd, int resume_eintr) {
     struct iovec iov;
     iov.iov_base = (void *)(uintptr_t)bytes;
     iov.iov_len = length;
@@ -129,8 +125,18 @@ maelys_sys_result_t maelys_sys_fd_send(
     }
     ssize_t sent;
     do {
-        sent = sendmsg(socket_fd, &message, MSG_NOSIGNAL);
-    } while (sent < 0 && errno == EINTR);
+        sent = FDPASS_FAULT("sendmsg") ? -1 : sendmsg(socket_fd, &message, MSG_NOSIGNAL);
+    } while (resume_eintr && sent < 0 && errno == EINTR);
+    return sent;
+}
+
+maelys_sys_result_t maelys_sys_fd_send(
+    int socket_fd, const void *bytes, size_t length, int passed_fd) {
+    if ((!bytes && length) || passed_fd < -1) return MAELYS_SYS_ERR_ARGUMENT;
+    maelys_sys_result_t checked = check_socket(socket_fd);
+    if (checked != MAELYS_SYS_OK) return checked;
+    if (passed_fd >= 0 && fcntl(passed_fd, F_GETFD) < 0) return MAELYS_SYS_ERR_ARGUMENT;
+    ssize_t sent = send_message(socket_fd, bytes, length, passed_fd, 1);
     if (sent < 0) return send_failure(errno);
     return MAELYS_SYS_OK;
 }
@@ -150,6 +156,7 @@ static maelys_sys_result_t receive_message(
     size_t *out_fd_count,
     unsigned *out_flags,
     int stream,
+    int resume_eintr,
     int *out_control) {
     *out_control = 0;
     if (out_received) *out_received = 0;
@@ -185,8 +192,8 @@ static maelys_sys_result_t receive_message(
         CMSG_SPACE(sizeof(int) * MAELYS_SYS_FDPASS_CONTROL_FDS));
     ssize_t received;
     do {
-        received = recvmsg(socket_fd, &message, FDPASS_RECEIVE_FLAGS);
-    } while (received < 0 && errno == EINTR);
+        received = FDPASS_FAULT("recvmsg") ? -1 : recvmsg(socket_fd, &message, FDPASS_RECEIVE_FLAGS);
+    } while (resume_eintr && received < 0 && errno == EINTR);
     if (received < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
         if (stream && errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
@@ -202,12 +209,14 @@ static maelys_sys_result_t receive_message(
     int descriptors[sizeof(control.space) / sizeof(int)];
     const size_t descriptor_room = sizeof(descriptors) / sizeof(descriptors[0]);
     size_t count = 0;
+    int unexpected_control = 0;
     const unsigned char *control_end =
         (const unsigned char *)message.msg_control + message.msg_controllen;
     for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header;
          header = CMSG_NXTHDR(&message, header)) {
         if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS ||
             header->cmsg_len < CMSG_LEN(0)) {
+            unexpected_control = 1;
             continue;
         }
         const unsigned char *data = CMSG_DATA(header);
@@ -238,6 +247,7 @@ static maelys_sys_result_t receive_message(
     }
 
     unsigned flags = 0;
+    if (stream && unexpected_control) flags |= MAELYS_SYS_FDPASS_UNEXPECTED_CONTROL;
     if ((message.msg_flags & MSG_TRUNC) || (!capacity && received > 0)) {
         flags |= MAELYS_SYS_FDPASS_TRUNCATED;
     }
@@ -267,7 +277,7 @@ maelys_sys_result_t maelys_sys_fd_receive(
     if (checked != MAELYS_SYS_OK) return checked;
     int control = 0;
     return receive_message(socket_fd, buffer, capacity, out_received, out_fds,
-                           fd_capacity, out_fd_count, out_flags, 0, &control);
+                           fd_capacity, out_fd_count, out_flags, 0, 1, &control);
 }
 
 maelys_sys_result_t maelys_sys_unix_receive_bytes(
@@ -280,7 +290,7 @@ maelys_sys_result_t maelys_sys_unix_receive_bytes(
         unsigned flags = 0;
         int control = 0;
         maelys_sys_result_t result = receive_message(socket_fd, buffer, capacity,
-            out_received, NULL, 0, &fd_count, &flags, 1, &control);
+            out_received, NULL, 0, &fd_count, &flags, 1, 1, &control);
         if (result != MAELYS_SYS_OK) return result;
         if (flags & MAELYS_SYS_FDPASS_CONTROL_TRUNCATED) {
             errno = EMSGSIZE;
@@ -292,4 +302,65 @@ maelys_sys_result_t maelys_sys_unix_receive_bytes(
     }
     errno = EPROTO;
     return MAELYS_SYS_ERR_OS;
+}
+
+static maelys_sys_result_t check_stream(int socket_fd) {
+    if (socket_fd < 0) return MAELYS_SYS_ERR_ARGUMENT;
+    int type = 0;
+    socklen_t length = (socklen_t)sizeof(type);
+    struct sockaddr_storage address = {0};
+    socklen_t address_length = (socklen_t)sizeof(address);
+    int flags = fcntl(socket_fd, F_GETFL);
+    if (flags < 0 || !(flags & O_NONBLOCK) ||
+        getsockopt(socket_fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0 ||
+        type != SOCK_STREAM ||
+        getsockname(socket_fd, (struct sockaddr *)&address, &address_length) != 0 ||
+        address.ss_family != AF_UNIX) return MAELYS_SYS_ERR_ARGUMENT;
+    return MAELYS_SYS_OK;
+}
+
+maelys_sys_result_t maelys_sys_fd_stream_send(
+    int socket_fd, const void *bytes, size_t length, int passed_fd, size_t *out_sent) {
+    if (out_sent) *out_sent = 0;
+    if (!out_sent || (!bytes && length) || length > (size_t)SSIZE_MAX ||
+        passed_fd < -1 || (!length && passed_fd >= 0)) return MAELYS_SYS_ERR_ARGUMENT;
+    maelys_sys_result_t checked = check_stream(socket_fd);
+    if (checked != MAELYS_SYS_OK) return checked;
+    if (passed_fd >= 0 && fcntl(passed_fd, F_GETFD) < 0) return MAELYS_SYS_ERR_ARGUMENT;
+    if (!length) return MAELYS_SYS_OK;
+    ssize_t sent = send_message(socket_fd, bytes, length, passed_fd, 0);
+    if (sent > 0) {
+        *out_sent = (size_t)sent;
+        return MAELYS_SYS_OK;
+    }
+    if (sent == 0 || errno == EAGAIN || errno == EWOULDBLOCK) return MAELYS_SYS_ERR_WOULD_BLOCK;
+#ifdef __APPLE__
+    if (passed_fd >= 0 && errno == EMSGSIZE) return MAELYS_SYS_ERR_WOULD_BLOCK;
+#endif
+    if (errno == EPIPE || errno == ENOTCONN) return MAELYS_SYS_ERR_CLOSED;
+    if (errno == ECONNRESET) return MAELYS_SYS_ERR_RESET;
+    return MAELYS_SYS_ERR_OS;
+}
+
+maelys_sys_result_t maelys_sys_fd_stream_receive(
+    int socket_fd, void *buffer, size_t capacity, size_t *out_received,
+    int *out_fds, size_t fd_capacity, size_t *out_fd_count, unsigned *out_flags) {
+    if (out_received) *out_received = 0;
+    if (out_fd_count) *out_fd_count = 0;
+    if (out_flags) *out_flags = 0;
+    if (out_fds) for (size_t i = 0; i < fd_capacity; ++i) out_fds[i] = -1;
+    if (!out_received || !out_fd_count || !out_flags || !buffer ||
+        (!out_fds && fd_capacity) || !capacity || capacity > (size_t)SSIZE_MAX) {
+        return MAELYS_SYS_ERR_ARGUMENT;
+    }
+    maelys_sys_result_t checked = check_stream(socket_fd);
+    if (checked != MAELYS_SYS_OK) return checked;
+    int control = 0;
+    maelys_sys_result_t result = receive_message(socket_fd, buffer, capacity,
+        out_received, out_fds, fd_capacity, out_fd_count, out_flags, 1, 0, &control);
+    if (result == MAELYS_SYS_OK && !*out_received && !control) {
+        *out_flags = 0;
+        return MAELYS_SYS_ERR_CLOSED;
+    }
+    return result;
 }

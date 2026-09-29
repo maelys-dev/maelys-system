@@ -39,7 +39,10 @@ typedef enum maelys_sys_fdpass_flags {
      * leaks on either host. */
     MAELYS_SYS_FDPASS_CONTROL_TRUNCATED = 1u << 1,
     /* More descriptors arrived than fd_capacity: the surplus was closed here. */
-    MAELYS_SYS_FDPASS_SURPLUS = 1u << 2
+    MAELYS_SYS_FDPASS_SURPLUS = 1u << 2,
+    /* Stream receive only: ancillary data other than SCM_RIGHTS arrived.
+     * The caller may reject it; it is not silently accepted as a frame. */
+    MAELYS_SYS_FDPASS_UNEXPECTED_CONTROL = 1u << 3
 } maelys_sys_fdpass_flags_t;
 
 /*
@@ -102,6 +105,62 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_receive(
     size_t fd_capacity,
     size_t *out_fd_count,
     unsigned *out_flags);
+
+/*
+ * Partial I/O on a connected AF_UNIX SOCK_STREAM socket. Both operations
+ * require O_NONBLOCK (checked, ERR_ARGUMENT otherwise), never change socket
+ * flags, suppress SIGPIPE on send, and make at most one sendmsg/recvmsg call.
+ * On ERR_OS/EINTR nothing transferred; the caller decides whether to retry
+ * within its own deadline. No framing, offsets, clocks or retry policy live
+ * here. The datagram operations above retain their original semantics.
+ *
+ * Send clears out_sent on entry. A positive out_sent means that prefix was
+ * queued, together with passed_fd if supplied: retry the remaining bytes
+ * WITHOUT the descriptor. This is not an acknowledgement by the receiver.
+ * On an error out_sent is zero and no descriptor was sent; it may be attached
+ * on a retry. The sender always keeps its original descriptor. passed_fd=-1
+ * means none. A zero length is allowed only without a descriptor (OK, zero
+ * progress); Linux drops and macOS delivers rights on an empty send, so that
+ * combination is ERR_ARGUMENT. length must not exceed SSIZE_MAX.
+ *
+ * ERR_WOULD_BLOCK includes EAGAIN/EWOULDBLOCK and, when sending rights on
+ * macOS, EMSGSIZE: insufficient room for the control record, including a
+ * full queue. This does not promise a retry will succeed; socket buffer
+ * limits can prevent a record from fitting even after data drains. Near-full
+ * queues can instead return EAGAIN; using a blocking socket there can hang.
+ * ERR_CLOSED is EPIPE/ENOTCONN; ERR_RESET is ECONNRESET. Other native errors
+ * remain ERR_OS with errno, rather than being relabelled as temporary.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_stream_send(
+    int socket_fd, const void *bytes, size_t length, int passed_fd,
+    size_t *out_sent);
+
+/*
+ * Receive reads no more than capacity (positive and <= SSIZE_MAX). It always
+ * reads control; mixing read/recv/MSG_PEEK with these calls is unsafe. The
+ * output clearing, ownership, surplus closing, CLOEXEC and fcntl-failure
+ * rules of fd_receive apply. out_fd_count counts stored descriptors, not
+ * those closed as surplus; fd_capacity may be zero. The control buffer
+ * covers the per-message rights maximum plus Linux credentials. It does
+ * not provide arbitrary ancillary-data transport. Truncation is flagged
+ * and must be rejected by a protocol requiring a complete transfer.
+ *
+ * OK need not advance bytes: macOS can deliver zero bytes with rights. Check
+ * out_fd_count AND SURPLUS even then; no rights are lost from observation.
+ * Zero bytes without rights is ERR_CLOSED, including the synthetic
+ * credentials Linux SO_PASSCRED may attach to EOF. Outputs are cleared on
+ * errors. ERR_RESET reports native ECONNRESET (Linux may report it when a
+ * peer closes with unread data, where macOS can report EOF instead). A
+ * protocol must validate frame completeness even on ERR_CLOSED.
+ *
+ * Frame assembly, bounded work, descriptor cardinality, closing descriptors
+ * held across partial reads, and abandonment on timeout are the caller's
+ * responsibilities. Returned descriptors inherit their open-file-description
+ * status flags; only close-on-exec is added.
+ */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_stream_receive(
+    int socket_fd, void *buffer, size_t capacity, size_t *out_received,
+    int *out_fds, size_t fd_capacity, size_t *out_fd_count, unsigned *out_flags);
 
 #ifdef __cplusplus
 }

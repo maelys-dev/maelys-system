@@ -64,8 +64,9 @@ static int close_since_snapshot(void) {
     return closed;
 }
 
-static int send_three(int socket_fd, int descriptor) {
-    int descriptors[3] = {descriptor, descriptor, descriptor};
+static int send_many(int socket_fd, int descriptor, size_t count) {
+    int descriptors[128];
+    for (size_t i = 0; i < count; ++i) descriptors[i] = descriptor;
     union {
         struct cmsghdr header;
         unsigned char space[CMSG_SPACE(sizeof(descriptors))];
@@ -78,13 +79,17 @@ static int send_three(int socket_fd, int descriptor) {
     message.msg_iov = &iov;
     message.msg_iovlen = 1;
     message.msg_control = control.space;
-    message.msg_controllen = sizeof(control.space);
+    message.msg_controllen = (socklen_t)CMSG_SPACE(count * sizeof(int));
     struct cmsghdr *header = CMSG_FIRSTHDR(&message);
     header->cmsg_level = SOL_SOCKET;
     header->cmsg_type = SCM_RIGHTS;
-    header->cmsg_len = CMSG_LEN(sizeof(descriptors));
-    memcpy(CMSG_DATA(header), descriptors, sizeof(descriptors));
+    header->cmsg_len = (socklen_t)CMSG_LEN(count * sizeof(int));
+    memcpy(CMSG_DATA(header), descriptors, count * sizeof(int));
     return sendmsg(socket_fd, &message, 0) == 1 ? 0 : -1;
+}
+
+static int send_three(int socket_fd, int descriptor) {
+    return send_many(socket_fd, descriptor, 3);
 }
 
 static int same_file(int left, int right) {
@@ -164,13 +169,77 @@ static int test_fcntl_failure_closes_all(void) {
     return 0;
 }
 
+/* Partial stream calls do not hide EINTR from the caller's deadline loop.
+ * Failed receives consume nothing; a post-receive fcntl failure closes all. */
+static int test_stream_faults(void) {
+    int pair[2], carried[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && pipe(carried) == 0);
+    CHECK(fcntl(pair[0], F_SETFL, O_NONBLOCK) == 0);
+    CHECK(fcntl(pair[1], F_SETFL, O_NONBLOCK) == 0);
+    size_t sent = 99, received = 99, count = 99;
+    unsigned flags = 99; int fd = 99; char byte = 0;
+    fault_step = "sendmsg"; fault_errno = EINTR;
+    CHECK(maelys_sys_fd_stream_send(pair[0], "x", 1, carried[0], &sent) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EINTR && sent == 0);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    CHECK(received == 0 && fd == -1 && count == 0 && flags == 0);
+    CHECK(maelys_sys_fd_stream_send(pair[0], "x", 1, carried[0], &sent) == MAELYS_SYS_OK && sent == 1);
+    fault_step = "recvmsg"; fault_errno = EINTR;
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EINTR && received == 0 && fd == -1 && count == 0 && flags == 0);
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_OK);
+    CHECK(received == 1 && byte == 'x' && count == 1 && flags == 0);
+    CHECK(fcntl(fd, F_GETFD) & FD_CLOEXEC);
+    CHECK(close(fd) == 0);
+    CHECK(send_three(pair[0], carried[0]) == 0);
+    snapshot_open();
+    fault_step = "fcntl"; fault_errno = EMFILE;
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EMFILE && received == 0 && fd == -1 && count == 0 && flags == 0);
+    CHECK(close_since_snapshot() == 0);
+    fault_step = "recvmsg"; fault_errno = ECONNRESET;
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_ERR_RESET);
+    CHECK(received == 0 && fd == -1 && count == 0 && flags == 0);
+    fault_step = "sendmsg"; fault_errno = EMSGSIZE;
+    CHECK(maelys_sys_fd_stream_send(pair[0], "x", 1, -1, &sent) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == EMSGSIZE && sent == 0);
+#ifdef __APPLE__
+    fault_step = "sendmsg"; fault_errno = EMSGSIZE;
+    CHECK(maelys_sys_fd_stream_send(pair[0], "x", 1, carried[0], &sent) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    CHECK(sent == 0);
+#endif
+    CHECK(close(carried[0]) == 0 && close(carried[1]) == 0);
+    CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
+    return 0;
+}
+
+static int test_stream_control_truncated(void) {
+    int pair[2], carried[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && pipe(carried) == 0);
+    CHECK(fcntl(pair[1], F_SETFL, O_NONBLOCK) == 0);
+    snapshot_open();
+    CHECK(send_many(pair[0], carried[0], 128) == 0);
+    char byte; int fd = -1; size_t received = 0, count = 0; unsigned flags = 0;
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &received, &fd, 1, &count, &flags) == MAELYS_SYS_OK);
+    CHECK(received == 1 && count == 1 && same_file(fd, carried[0]));
+    CHECK((flags & MAELYS_SYS_FDPASS_CONTROL_TRUNCATED) && (flags & MAELYS_SYS_FDPASS_SURPLUS));
+    CHECK(fcntl(fd, F_GETFD) & FD_CLOEXEC);
+    /* The deliberately shrunken test buffer violates the production bound:
+     * reclaim even the rights macOS installs without reporting in this case. */
+    (void)close_since_snapshot();
+    CHECK(close(carried[0]) == 0 && close(carried[1]) == 0);
+    CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
+    return 0;
+}
+
 int main(void) {
     if (test_control_truncated() || test_fcntl_branch_sets_cloexec() ||
-        test_fcntl_failure_closes_all()) {
+        test_fcntl_failure_closes_all() || test_stream_faults() || test_stream_control_truncated()) {
         return 1;
     }
     puts("ok - fdpass control truncation flagged, only copied descriptors returned");
     puts("ok - fdpass fcntl branch sets close-on-exec on every host");
     puts("ok - fdpass fcntl failure closes every descriptor received");
+    puts("ok - partial stream faults preserve progress and descriptor ownership");
     return 0;
 }

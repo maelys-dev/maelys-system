@@ -161,4 +161,16 @@ run_mutant_darwin unix-control-only-is-eof src/fdpass.c \
 run_mutant_linux condition-wall-clock src/thread.c \
     'status = pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);' 'status = 0;'
 
+run_mutant stream-progress-lost src/fdpass.c \
+    '*out_sent = (size_t)sent;' '*out_sent = 0;'
+run_mutant stream-blocking-socket-admitted src/fdpass.c \
+    'flags < 0 || !(flags & O_NONBLOCK) ||' 'flags < 0 ||'
+run_mutant stream-empty-rights-admitted src/fdpass.c \
+    'passed_fd < -1 || (!length && passed_fd >= 0)' 'passed_fd < -1'
+run_mutant stream-eintr-retried src/fdpass.c \
+    'send_message(socket_fd, bytes, length, passed_fd, 0)' \
+    'send_message(socket_fd, bytes, length, passed_fd, 1)'
+run_mutant_linux stream-unexpected-control-hidden src/fdpass.c \
+    'flags |= MAELYS_SYS_FDPASS_UNEXPECTED_CONTROL;' 'flags |= 0;'
+
 printf '%s\n' "mutation check: $killed/$killed killed"
