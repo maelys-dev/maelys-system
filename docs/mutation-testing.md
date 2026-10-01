@@ -1,7 +1,7 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies forty-two one-line faults, four of them on Linux only
+directories, applies forty-five one-line faults, four of them on Linux only
 and three on macOS only, and
 requires the existing tests to reject every mutant. Nine target the reactor:
 
@@ -56,6 +56,12 @@ Two more target byte-only Unix receives on macOS (0.10.1): bypassing control
 cleanup and treating a control-only record as EOF. The Linux kernel does not
 expose these two faults; both hosts run the descriptor-count regression,
 including Linux SO_PASSCRED at EOF.
+
+Three more target what follows a receive, found unobserved by a review of
+0.11.0: the descriptors already marked left open when marking a later one
+fails; a failed `F_SETFD` ignored; and the surplus marked close-on-exec
+before being closed, which costs a hostile peer nothing and the receiver
+three system calls per descriptor.
 
 Five target partial stream operations (0.11): losing the send byte count,
 accepting a blocking socket, accepting empty rights-bearing sends, hiding
