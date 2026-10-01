@@ -88,8 +88,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_send(
  * Each descriptor returned is close-on-exec: atomically with MSG_CMSG_CLOEXEC
  * on Linux; on macOS, which lacks it, with fcntl(2) right after recvmsg(2),
  * and a fork+exec racing in another thread can inherit one in between.
- * Should that fcntl fail, every descriptor received is closed and the call
- * is ERR_OS: the datagram is consumed and lost.
+ * The surplus is closed first and never marked. Should marking a descriptor
+ * fail, every descriptor of the message is closed, those already marked
+ * included, and the call is ERR_OS: the datagram is consumed and lost.
  *
  * A datagram socket has no end of stream: a peer that left shows on send,
  * not here, where the queue simply stays empty. ERR_WOULD_BLOCK on a
@@ -152,6 +153,12 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_stream_send(
  * errors. ERR_RESET reports native ECONNRESET (Linux may report it when a
  * peer closes with unread data, where macOS can report EOF instead). A
  * protocol must validate frame completeness even on ERR_CLOSED.
+ *
+ * An error after the read has still consumed it. Should marking a returned
+ * descriptor close-on-exec fail, the call is ERR_OS with out_received 0 and
+ * every descriptor closed, yet the bytes of that read are gone from the
+ * stream: the caller no longer knows where its frame stands and must abandon
+ * the exchange, not retry. CONTROL_TRUNCATED on OK calls for the same.
  *
  * Frame assembly, bounded work, descriptor cardinality, closing descriptors
  * held across partial reads, and abandonment on timeout are the caller's

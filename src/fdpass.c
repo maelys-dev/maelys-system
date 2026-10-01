@@ -233,13 +233,27 @@ static maelys_sys_result_t receive_message(
      * Only rights (including truncated rights) make a zero-byte receive
      * something other than EOF here, not the presence of any control. */
     *out_control = count != 0 || (message.msg_flags & MSG_CTRUNC) != 0;
+    /* The surplus goes first: it is never returned, so it needs no
+     * close-on-exec, and a peer attaching the maximum to every message buys
+     * one close per descriptor here, not three system calls. A byte-only
+     * receive, where everything is surplus, then cannot fail after it read. */
+    size_t kept = count < fd_capacity ? count : fd_capacity;
+    int surplus = count > kept;
+    if (surplus) close_received(descriptors + kept, count - kept);
     if (FDPASS_NEEDS_FCNTL) {
-        for (size_t index = 0; index < count; ++index) {
-            int flags = FDPASS_FAULT("fcntl") ? -1 : fcntl(descriptors[index], F_GETFD);
-            if (flags < 0 ||
-                fcntl(descriptors[index], F_SETFD, flags | FD_CLOEXEC) != 0) {
+        for (size_t index = 0; index < kept; ++index) {
+            int descriptor_flags =
+                FDPASS_FAULT("fcntl") ? -1 : fcntl(descriptors[index], F_GETFD);
+            int failed = descriptor_flags < 0;
+            if (!failed) {
+                failed = FDPASS_FAULT("fcntl-setfd") ||
+                    fcntl(descriptors[index], F_SETFD, descriptor_flags | FD_CLOEXEC) != 0;
+            }
+            if (failed) {
+                /* Every descriptor kept goes, those already marked included:
+                 * none is returned, so none may stay open. */
                 int saved = errno;
-                close_received(descriptors, count);
+                close_received(descriptors, kept);
                 errno = saved;
                 return MAELYS_SYS_ERR_OS;
             }
@@ -252,12 +266,8 @@ static maelys_sys_result_t receive_message(
         flags |= MAELYS_SYS_FDPASS_TRUNCATED;
     }
     if (message.msg_flags & MSG_CTRUNC) flags |= MAELYS_SYS_FDPASS_CONTROL_TRUNCATED;
-    size_t kept = count < fd_capacity ? count : fd_capacity;
     for (size_t index = 0; index < kept; ++index) out_fds[index] = descriptors[index];
-    if (count > kept) {
-        close_received(descriptors + kept, count - kept);
-        flags |= MAELYS_SYS_FDPASS_SURPLUS;
-    }
+    if (surplus) flags |= MAELYS_SYS_FDPASS_SURPLUS;
     *out_received = capacity ? (size_t)received : 0u;
     *out_fd_count = kept;
     *out_flags = flags;

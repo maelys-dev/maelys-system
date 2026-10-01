@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- After a receive, the surplus is closed before anything is marked
+  close-on-exec, and only the descriptors returned are marked. On macOS,
+  where marking is two `fcntl` calls, a peer attaching 254 descriptors to
+  every message cost the receiver three system calls per descriptor; it now
+  costs one. A byte-only `maelys_sys_socket_receive` on a Unix socket, where
+  every descriptor is surplus, can no longer fail after it has read.
+- The stream receive contract says outright what an error after the read
+  costs: the bytes are consumed although `out_received` is 0, so the caller
+  abandons the exchange instead of retrying.
+- A review of 0.11.0 found two faults the tests let through, both now in the
+  mutation gate with a third: closing only the descriptors not yet marked
+  when marking one fails, ignoring a failed `F_SETFD`, and marking the
+  surplus. The white-box test fails marking on the second and third
+  descriptor of a batch and on `F_SETFD`, and checks nothing stays open.
+
 ## 0.11.0 - 2026-09-29
 
 - Add partial `maelys_sys_fd_stream_send` and `maelys_sys_fd_stream_receive`

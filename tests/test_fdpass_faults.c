@@ -35,9 +35,12 @@
 
 static const char *fault_step;
 static int fault_errno;
+/* How many matching steps to let through before the fault fires. */
+static int fault_skip;
 
 static int fdpass_fault(const char *step) {
     if (!fault_step || strcmp(step, fault_step) != 0) return 0;
+    if (fault_skip > 0) { --fault_skip; return 0; }
     fault_step = NULL;
     errno = fault_errno;
     return 1;
@@ -213,6 +216,65 @@ static int test_stream_faults(void) {
     return 0;
 }
 
+/* Marking close-on-exec failing partway through a batch, on either of its two
+ * calls: every descriptor of the batch is closed, those already marked
+ * included, and nothing is returned. The bytes of that read are consumed all
+ * the same, which is why a stream caller abandons the exchange. And the
+ * surplus is closed before any marking, so it is never marked at all. */
+static int test_fcntl_failure_partway(void) {
+    static const struct { const char *step; int skip; } faults[] = {
+        {"fcntl", 1},        /* F_GETFD of the second descriptor */
+        {"fcntl-setfd", 0},  /* F_SETFD of the first */
+        {"fcntl-setfd", 2}   /* F_SETFD of the third, two already marked */
+    };
+    int pair[2], carried[2];
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && pipe(carried) == 0);
+    CHECK(fcntl(pair[1], F_SETFL, O_NONBLOCK) == 0);
+    for (size_t round = 0; round < sizeof(faults) / sizeof(faults[0]); ++round) {
+        CHECK(send_three(pair[0], carried[0]) == 0);
+        snapshot_open();
+        fault_step = faults[round].step;
+        fault_skip = faults[round].skip;
+        fault_errno = EMFILE;
+        char byte = 0;
+        int received[3] = {7, 7, 7};
+        size_t length = 1, count = 1;
+        unsigned flags = 1;
+        errno = 0;
+        CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &length, received, 3,
+            &count, &flags) == MAELYS_SYS_ERR_OS);
+        CHECK(errno == EMFILE && fault_step == NULL);
+        CHECK(length == 0u && count == 0u && flags == 0u);
+        CHECK(received[0] == -1 && received[1] == -1 && received[2] == -1);
+        CHECK(close_since_snapshot() == 0);
+        /* The byte went with the descriptors: the queue is empty again. */
+        CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &length, received, 3,
+            &count, &flags) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    }
+    /* Three arrive, one is taken: only that one is marked, so a fault armed
+     * for a second marking never fires and the call succeeds. */
+    CHECK(send_three(pair[0], carried[0]) == 0);
+    snapshot_open();
+    fault_step = "fcntl";
+    fault_skip = 1;
+    fault_errno = EMFILE;
+    char byte = 0;
+    int taken = -1;
+    size_t length = 0, count = 0;
+    unsigned flags = 0;
+    CHECK(maelys_sys_fd_stream_receive(pair[1], &byte, 1, &length, &taken, 1, &count,
+        &flags) == MAELYS_SYS_OK);
+    CHECK(fault_step != NULL && fault_skip == 0);
+    fault_step = NULL;
+    CHECK(length == 1u && count == 1u && flags == MAELYS_SYS_FDPASS_SURPLUS);
+    CHECK(same_file(taken, carried[0]) && (fcntl(taken, F_GETFD) & FD_CLOEXEC));
+    CHECK(close(taken) == 0);
+    CHECK(close_since_snapshot() == 0);
+    CHECK(close(carried[0]) == 0 && close(carried[1]) == 0);
+    CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
+    return 0;
+}
+
 static int test_stream_control_truncated(void) {
     int pair[2], carried[2];
     CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0 && pipe(carried) == 0);
@@ -234,12 +296,14 @@ static int test_stream_control_truncated(void) {
 
 int main(void) {
     if (test_control_truncated() || test_fcntl_branch_sets_cloexec() ||
-        test_fcntl_failure_closes_all() || test_stream_faults() || test_stream_control_truncated()) {
+        test_fcntl_failure_closes_all() || test_stream_faults() ||
+        test_fcntl_failure_partway() || test_stream_control_truncated()) {
         return 1;
     }
     puts("ok - fdpass control truncation flagged, only copied descriptors returned");
     puts("ok - fdpass fcntl branch sets close-on-exec on every host");
     puts("ok - fdpass fcntl failure closes every descriptor received");
     puts("ok - partial stream faults preserve progress and descriptor ownership");
+    puts("ok - fdpass marking failing partway closes the batch; surplus is never marked");
     return 0;
 }

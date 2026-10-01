@@ -133,7 +133,7 @@ run_mutant parent-sync-skipped src/file.c \
 run_mutant fdpass-surplus-left-open src/fdpass.c \
     'close_received(descriptors + kept, count - kept);' '(void)0;'
 run_mutant fdpass-fcntl-failure-leaks src/fdpass.c \
-    '                close_received(descriptors, count);' '                (void)0;'
+    '                close_received(descriptors, kept);' '                (void)0;'
 run_mutant fdpass-peer-gone-reported-as-os-error src/fdpass.c \
     '            return MAELYS_SYS_ERR_CLOSED;' '            return MAELYS_SYS_ERR_OS;'
 run_mutant fdpass-full-queue-reported-as-os-error src/fdpass.c \
@@ -143,9 +143,18 @@ run_mutant fdpass-full-queue-reported-as-os-error src/fdpass.c \
 run_mutant fdpass-socket-type-unchecked src/fdpass.c \
     '        type != SOCK_DGRAM) {' '        0) {'
 run_mutant fdpass-cloexec-not-set src/fdpass.c \
-    'F_SETFD, flags | FD_CLOEXEC)' 'F_SETFD, flags)'
+    'F_SETFD, descriptor_flags | FD_CLOEXEC)' 'F_SETFD, descriptor_flags)'
 run_mutant fdpass-empty-datagram-called-truncated src/fdpass.c \
     '(!capacity && received > 0)' '(!capacity)'
+run_mutant fdpass-fcntl-failure-keeps-earlier src/fdpass.c \
+    '                close_received(descriptors, kept);' \
+    '                close_received(descriptors + index, kept - index);'
+run_mutant fdpass-setfd-failure-ignored src/fdpass.c \
+    '            if (failed) {' '            if (failed && descriptor_flags < 0) {'
+run_mutant fdpass-surplus-marked-before-close src/fdpass.c \
+    'for (size_t index = 0; index < kept; ++index) {
+            int descriptor_flags' 'for (size_t index = 0; index < count; ++index) {
+            int descriptor_flags'
 run_mutant_linux fdpass-receive-without-cmsg-cloexec src/fdpass.c \
     '#define FDPASS_RECEIVE_FLAGS MSG_CMSG_CLOEXEC' '#define FDPASS_RECEIVE_FLAGS 0'
 run_mutant_darwin fdpass-control-read-past-copy src/fdpass.c \
