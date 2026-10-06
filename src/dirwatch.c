@@ -23,6 +23,7 @@
 
 #if defined(__linux__)
 #include <sys/inotify.h>
+#include <sys/ioctl.h>
 #define DIRWATCH_INOTIFY 1
 #define DIRWATCH_KQUEUE 0
 #elif defined(__APPLE__)
@@ -84,6 +85,14 @@ struct maelys_sys_dirwatch {
     size_t cursor; /* where the next poll starts serving, so entries take turns */
     maelys_sys_dirwatch_entry_t next_id;
     dirwatch_entry_t *entries;
+#if DIRWATCH_INOTIFY
+    /* From a watch number to its entry, so that a queued event finds it
+     * without a walk of the table: open addressing over a power of two of
+     * cells, at least twice the capacity. 0 is an empty cell, any other
+     * value the slot plus one. */
+    size_t *index;
+    size_t index_mask;
+#endif
 };
 
 #if DIRWATCH_INOTIFY || DIRWATCH_KQUEUE
@@ -99,9 +108,52 @@ static dirwatch_entry_t *free_slot(maelys_sys_dirwatch_t *dirwatch) {
     return NULL;
 }
 
+#if DIRWATCH_INOTIFY
+static size_t index_home(const maelys_sys_dirwatch_t *dirwatch, int wd) {
+    return (size_t)wd & dirwatch->index_mask;
+}
+
+/* The live entry of a watch number, or NULL: a number the kernel still has
+ * events queued for after its entry was released costs no more than one
+ * that is live. Half the cells are empty, so every run of them ends. */
+static dirwatch_entry_t *entry_of_watch(maelys_sys_dirwatch_t *dirwatch, int wd) {
+    for (size_t at = index_home(dirwatch, wd); dirwatch->index[at];
+            at = (at + 1u) & dirwatch->index_mask) {
+        dirwatch_entry_t *entry = &dirwatch->entries[dirwatch->index[at] - 1u];
+        if (entry->wd == wd) return entry;
+    }
+    return NULL;
+}
+
+static void index_remember(maelys_sys_dirwatch_t *dirwatch, const dirwatch_entry_t *entry) {
+    size_t at = index_home(dirwatch, entry->wd);
+    while (dirwatch->index[at]) at = (at + 1u) & dirwatch->index_mask;
+    dirwatch->index[at] = (size_t)(entry - dirwatch->entries) + 1u;
+}
+
+/* Leaves no gap in a run of cells: what follows the freed cell moves back
+ * into it unless that would put it before its own home. */
+static void index_forget(maelys_sys_dirwatch_t *dirwatch, const dirwatch_entry_t *entry) {
+    size_t mask = dirwatch->index_mask;
+    size_t self = (size_t)(entry - dirwatch->entries) + 1u;
+    size_t hole = index_home(dirwatch, entry->wd);
+    while (dirwatch->index[hole] && dirwatch->index[hole] != self) hole = (hole + 1u) & mask;
+    if (!dirwatch->index[hole]) return;
+    for (size_t at = (hole + 1u) & mask; dirwatch->index[at]; at = (at + 1u) & mask) {
+        size_t home = index_home(dirwatch, dirwatch->entries[dirwatch->index[at] - 1u].wd);
+        if (((at - home) & mask) >= ((at - hole) & mask)) {
+            dirwatch->index[hole] = dirwatch->index[at];
+            hole = at;
+        }
+    }
+    dirwatch->index[hole] = 0;
+}
+#endif
+
 /* Gives the kernel its registration back and frees the slot. */
 static void release_entry(maelys_sys_dirwatch_t *dirwatch, dirwatch_entry_t *entry) {
 #if DIRWATCH_INOTIFY
+    index_forget(dirwatch, entry);
     /* EINVAL when the kernel dropped the watch itself, with the directory. */
     (void)inotify_rm_watch(dirwatch->kernel_fd, entry->wd);
 #else
@@ -154,6 +206,15 @@ maelys_sys_result_t maelys_sys_dirwatch_create(
         return MAELYS_SYS_ERR_MEMORY;
     }
 #if DIRWATCH_INOTIFY
+    size_t cells = 2;
+    while (cells / 2u < entry_capacity && cells <= SIZE_MAX / 2u) cells *= 2u;
+    if (cells / 2u >= entry_capacity) dirwatch->index = calloc(cells, sizeof(*dirwatch->index));
+    if (!dirwatch->index) {
+        free(dirwatch->entries);
+        free(dirwatch);
+        return MAELYS_SYS_ERR_MEMORY;
+    }
+    dirwatch->index_mask = cells - 1u;
     int fd = DIRWATCH_FAULT("create") ? -1 : inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 #else
     int fd = DIRWATCH_FAULT("create") ? -1 : kqueue();
@@ -166,6 +227,9 @@ maelys_sys_result_t maelys_sys_dirwatch_create(
 #endif
     if (fd < 0) {
         int saved = errno;
+#if DIRWATCH_INOTIFY
+        free(dirwatch->index);
+#endif
         free(dirwatch->entries);
         free(dirwatch);
         errno = saved;
@@ -213,6 +277,7 @@ maelys_sys_result_t maelys_sys_dirwatch_add(
         return MAELYS_SYS_ERR_CAPACITY;
     }
     slot->wd = wd;
+    index_remember(dirwatch, slot);
 #else
     int fd = DIRWATCH_FAULT("open") ? -1 :
         open(path, O_EVTONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -243,6 +308,8 @@ maelys_sys_result_t maelys_sys_dirwatch_add(
     change.filter = EVFILT_VNODE;
     change.flags = EV_ADD | EV_CLEAR;
     change.fflags = DIRWATCH_NOTES;
+    /* The kernel hands the slot back with each event: no search. */
+    change.udata = (void *)(uintptr_t)(slot - dirwatch->entries);
     if (DIRWATCH_FAULT("register") ||
         kevent(dirwatch->kernel_fd, &change, 1, NULL, 0, NULL) != 0) {
         int saved = errno;
@@ -287,11 +354,22 @@ maelys_sys_result_t maelys_sys_dirwatch_remove(
 }
 
 #if DIRWATCH_INOTIFY
-/* Reads everything the kernel queued into the pending bits. The names in
- * the records only serve to step over them. */
+/*
+ * Reads what the kernel had queued when the call began into the pending
+ * bits, and no more. Reading until the queue is empty would never return
+ * while a directory keeps changing faster than this reads: whoever may
+ * write there would hold the owner thread, often a loop's, inside poll.
+ * What arrives meanwhile stays queued and keeps the descriptor readable.
+ * The names in the records only serve to step over them.
+ */
 static maelys_sys_result_t take_kernel_events(maelys_sys_dirwatch_t *dirwatch) {
     _Alignas(struct inotify_event) char buffer[4096];
-    for (;;) {
+    int queued = 0;
+    if (DIRWATCH_FAULT("size") ||
+        ioctl(dirwatch->kernel_fd, FIONREAD, &queued) != 0) return MAELYS_SYS_ERR_OS;
+    size_t owed = queued > 0 ? (size_t)queued : 0u;
+    size_t taken = 0;
+    while (taken < owed) {
         ssize_t length = DIRWATCH_FAULT("read") ? -1 :
             read(dirwatch->kernel_fd, buffer, sizeof(buffer));
         if (length < 0) {
@@ -300,6 +378,7 @@ static maelys_sys_result_t take_kernel_events(maelys_sys_dirwatch_t *dirwatch) {
             return MAELYS_SYS_ERR_OS;
         }
         if (length == 0) return MAELYS_SYS_OK;
+        taken += (size_t)length;
         size_t offset = 0;
         while ((size_t)length - offset >= sizeof(struct inotify_event)) {
             const struct inotify_event *event =
@@ -311,32 +390,46 @@ static maelys_sys_result_t take_kernel_events(maelys_sys_dirwatch_t *dirwatch) {
                 mark_overflow(dirwatch);
                 continue;
             }
-            for (size_t index = 0; index < dirwatch->capacity; ++index) {
-                dirwatch_entry_t *entry = &dirwatch->entries[index];
-                if (!entry->id || entry->wd != event->wd) continue;
-                /* IN_IGNORED: the kernel let the watch go, for a reason it
-                 * may not have told otherwise. Never a silent release. */
-                if (event->mask & (DIRWATCH_SELF | IN_IGNORED)) {
-                    entry->pending |= MAELYS_SYS_DIRWATCH_GONE;
-                }
-                if (event->mask & DIRWATCH_ENTRIES) {
-                    entry->pending |= MAELYS_SYS_DIRWATCH_CHANGED;
-                }
-                break;
+            dirwatch_entry_t *entry = entry_of_watch(dirwatch, event->wd);
+            if (!entry) continue;
+            /* IN_IGNORED: the kernel let the watch go, for a reason it may
+             * not have told otherwise. Never a silent release. */
+            if (event->mask & (DIRWATCH_SELF | IN_IGNORED)) {
+                entry->pending |= MAELYS_SYS_DIRWATCH_GONE;
+            }
+            if (event->mask & DIRWATCH_ENTRIES) {
+                entry->pending |= MAELYS_SYS_DIRWATCH_CHANGED;
             }
         }
     }
+    return MAELYS_SYS_OK;
 }
 #endif
 
 #if DIRWATCH_KQUEUE
-/* Takes every event the kqueue holds, in bounded batches, into the pending
- * bits. The kernel already merged what happened to one descriptor. */
+/* The entry an event is for: the slot its registration named, checked
+ * against the descriptor the event names. */
+static dirwatch_entry_t *entry_of_event(maelys_sys_dirwatch_t *dirwatch,
+    const struct kevent *event) {
+    size_t index = (size_t)(uintptr_t)event->udata;
+    if (index >= dirwatch->capacity) return NULL;
+    dirwatch_entry_t *entry = &dirwatch->entries[index];
+    return entry->id && (uintptr_t)entry->fd == event->ident ? entry : NULL;
+}
+
+/*
+ * Takes the events the kqueue holds into the pending bits, in batches, and
+ * no more batches than it takes to hear every entry once: the kernel merges
+ * what happens to one descriptor, so that is everything it held when the
+ * call began. Going on while batches come back full would never return
+ * while enough directories keep changing.
+ */
 static maelys_sys_result_t take_kernel_events(maelys_sys_dirwatch_t *dirwatch) {
     enum { BATCH = 64 };
     struct kevent events[BATCH];
     const struct timespec no_wait = {0, 0};
-    for (;;) {
+    size_t batches = dirwatch->capacity / BATCH + 1u;
+    for (size_t batch = 0; batch < batches; ++batch) {
         int count = DIRWATCH_FAULT("read") ? -1 :
             kevent(dirwatch->kernel_fd, NULL, 0, events, BATCH, &no_wait);
         if (count < 0) {
@@ -345,20 +438,18 @@ static maelys_sys_result_t take_kernel_events(maelys_sys_dirwatch_t *dirwatch) {
         }
         for (int position = 0; position < count; ++position) {
             if (events[position].filter != EVFILT_VNODE) continue;
-            for (size_t index = 0; index < dirwatch->capacity; ++index) {
-                dirwatch_entry_t *entry = &dirwatch->entries[index];
-                if (!entry->id || (uintptr_t)entry->fd != events[position].ident) continue;
-                if (events[position].fflags & DIRWATCH_SELF) {
-                    entry->pending |= MAELYS_SYS_DIRWATCH_GONE;
-                }
-                if (events[position].fflags & DIRWATCH_ENTRIES) {
-                    entry->pending |= MAELYS_SYS_DIRWATCH_CHANGED;
-                }
-                break;
+            dirwatch_entry_t *entry = entry_of_event(dirwatch, &events[position]);
+            if (!entry) continue;
+            if (events[position].fflags & DIRWATCH_SELF) {
+                entry->pending |= MAELYS_SYS_DIRWATCH_GONE;
+            }
+            if (events[position].fflags & DIRWATCH_ENTRIES) {
+                entry->pending |= MAELYS_SYS_DIRWATCH_CHANGED;
             }
         }
-        if (count < BATCH) return MAELYS_SYS_OK;
+        if (count < BATCH) break;
     }
+    return MAELYS_SYS_OK;
 }
 #endif
 
@@ -408,6 +499,9 @@ maelys_sys_result_t maelys_sys_dirwatch_destroy(maelys_sys_dirwatch_t **dirwatch
         if (handle->entries[index].id) release_entry(handle, &handle->entries[index]);
     }
     (void)close(handle->kernel_fd);
+#if DIRWATCH_INOTIFY
+    free(handle->index);
+#endif
     free(handle->entries);
     free(handle);
     *dirwatch = NULL;
