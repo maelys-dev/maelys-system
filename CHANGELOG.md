@@ -1,7 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 - 2026-10-06
 
+- Directory watching, `maelys/sys/dirwatch.h`: "the entries of this
+  directory changed: reread it." No file name, no recursion, no file
+  content. Two consumers carry it by hand today: codexmanager waits for a
+  socket to appear with inotify and with kqueue in two files, and cx watches
+  the directories of another program through a daemon it should not need.
+  The contract was written from measurements on Linux 6.10 and macOS 26.6:
+  - a creation, a removal, a rename and a replacement by rename onto an
+    existing name are reported on both hosts, coalesced to one change per
+    entry between two polls;
+  - a write in place and a change of metadata are reported on neither.
+    inotify could report them and is not asked to, so that a caller written
+    on Linux does not lean on a signal kqueue never gives;
+  - the entry follows the directory, not its path: renaming the directory
+    itself is GONE, renaming an ancestor says nothing on either host, and
+    the contract names that the absence of GONE proves nothing about the
+    path;
+  - inotify answers by inode and hands back the watch it already has for a
+    directory added twice, so one directory is one entry on both hosts,
+    `ERR_EXISTS` otherwise, by whatever path;
+  - add before reading the directory, and poll until `ERR_WOULD_BLOCK`: the
+    descriptor speaks for the kernel's queue, not for what the handle still
+    owes.
+  The descriptor goes in a loop on every backend, which `loop.h` now says. A
+  kernel limit is `ERR_OS` with its `errno`; on macOS each entry holds one
+  open descriptor, against a default limit of 256.
+- Mutation gate at fifty-nine, fourteen of them on directory watching.
+- Adopt maelys-release 0.62.3: the formula's test runs on a poured bottle at
+  release, and a failure keeps the formula out of the tap.
 - After a receive, the surplus is closed before anything is marked
   close-on-exec, and only the descriptors returned are marked. On macOS,
   where marking is two `fcntl` calls, a peer attaching 254 descriptors to

@@ -182,4 +182,46 @@ run_mutant stream-eintr-retried src/fdpass.c \
 run_mutant_linux stream-unexpected-control-hidden src/fdpass.c \
     'flags |= MAELYS_SYS_FDPASS_UNEXPECTED_CONTROL;' 'flags |= 0;'
 
+# Directory watching (0.12): what keeps the two hosts answering alike, and
+# what the bookkeeping of entries must not get wrong.
+run_mutant dirwatch-gone-keeps-entry src/dirwatch.c \
+    'if (entry->pending & MAELYS_SYS_DIRWATCH_GONE) release_entry(dirwatch, entry);' \
+    'if (0) release_entry(dirwatch, entry);'
+run_mutant dirwatch-pending-not-cleared src/dirwatch.c \
+    'else entry->pending = 0;' 'else (void)0;'
+run_mutant dirwatch-no-turns src/dirwatch.c \
+    'dirwatch->cursor = (last + 1) % dirwatch->capacity;' \
+    'dirwatch->cursor = (last + 1) % 1u;'
+run_mutant dirwatch-overflow-marks-one-entry src/dirwatch.c \
+    'static void mark_overflow(maelys_sys_dirwatch_t *dirwatch) {
+    for (size_t index = 0; index < dirwatch->capacity; ++index) {' \
+    'static void mark_overflow(maelys_sys_dirwatch_t *dirwatch) {
+    for (size_t index = 0; index < 1u; ++index) {'
+run_mutant dirwatch-owner-unchecked src/dirwatch.c \
+    'return pthread_equal(dirwatch->owner, pthread_self());' \
+    'return pthread_equal(dirwatch->owner, dirwatch->owner);'
+run_mutant_linux dirwatch-write-in-place-reported src/dirwatch.c \
+    '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)' \
+    '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE)'
+run_mutant_linux dirwatch-metadata-reported src/dirwatch.c \
+    '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)' \
+    '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_ATTRIB)'
+run_mutant_linux dirwatch-renamed-directory-kept src/dirwatch.c \
+    '#define DIRWATCH_SELF (IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)' \
+    '#define DIRWATCH_SELF (IN_DELETE_SELF | IN_UNMOUNT)'
+run_mutant_linux dirwatch-same-directory-twice src/dirwatch.c \
+    'dirwatch->entries[index].wd == wd' '0'
+run_mutant_linux dirwatch-link-followed src/dirwatch.c \
+    'DIRWATCH_MASK | IN_DONT_FOLLOW | IN_ONLYDIR' 'DIRWATCH_MASK | IN_ONLYDIR'
+run_mutant_darwin dirwatch-metadata-reported src/dirwatch.c \
+    '#define DIRWATCH_ENTRIES (NOTE_WRITE | NOTE_LINK)' \
+    '#define DIRWATCH_ENTRIES (NOTE_WRITE | NOTE_LINK | NOTE_ATTRIB)'
+run_mutant_darwin dirwatch-renamed-directory-kept src/dirwatch.c \
+    '#define DIRWATCH_SELF (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)' \
+    '#define DIRWATCH_SELF (NOTE_DELETE | NOTE_REVOKE)'
+run_mutant_darwin dirwatch-same-directory-twice src/dirwatch.c \
+    'entry->device == status.st_dev && entry->inode == status.st_ino' '0'
+run_mutant_darwin dirwatch-link-followed src/dirwatch.c \
+    'O_EVTONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC' 'O_EVTONLY | O_DIRECTORY | O_CLOEXEC'
+
 printf '%s\n' "mutation check: $killed/$killed killed"
