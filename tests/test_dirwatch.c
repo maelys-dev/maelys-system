@@ -434,16 +434,27 @@ static int test_descriptor_limit(void) {
     for (int fd = 0; fd < 1024; ++fd) {
         if (fcntl(fd, F_GETFD) >= 0) highest = fd;
     }
-    int before = count_open();
     lowered = saved;
     lowered.rlim_cur = (rlim_t)(highest + 1);
     CHECK(setrlimit(RLIMIT_NOFILE, &lowered) == 0);
+    /* A process may inherit descriptors that leave gaps below the highest:
+     * fill them all, or the next open would simply take one. */
+    int fillers[1024];
+    size_t filled = 0;
+    for (;;) {
+        int filler = dup(0);
+        if (filler < 0) break;
+        fillers[filled++] = filler;
+    }
+    int before = count_open();
     errno = 0;
     maelys_sys_result_t result = maelys_sys_dirwatch_add(dirwatch, dir, 1, &entry);
     int error = errno;
+    int after = count_open();
+    for (size_t index = 0; index < filled; ++index) (void)close(fillers[index]);
     CHECK(setrlimit(RLIMIT_NOFILE, &saved) == 0);
     CHECK(result == MAELYS_SYS_ERR_OS && error == EMFILE && entry == 0u);
-    CHECK(count_open() == before);
+    CHECK(after == before);
     CHECK(maelys_sys_dirwatch_add(dirwatch, dir, 1, &entry) == MAELYS_SYS_OK);
     CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
     CHECK(rmdir(dir) == 0);
