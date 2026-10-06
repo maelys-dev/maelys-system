@@ -33,10 +33,14 @@
  * the absence of GONE does not say that the path still names this directory.
  *
  * The descriptor says what the kernel holds, not what this object still owes
- * the caller: once readable, poll until ERR_WOULD_BLOCK, or changes that did
- * not fit in one call wait with nothing to wake the loop. It may also be
- * readable with nothing to report, as on Linux after an entry is released,
- * where the kernel acknowledges it: the poll then says ERR_WOULD_BLOCK.
+ * the caller. A poll that fills its array may leave changes pending here with
+ * nothing to wake the loop: poll again. A poll that returns fewer changes
+ * than capacity has delivered all this object held, and what the kernel took
+ * in meanwhile keeps the descriptor readable: go back to the loop. Polling
+ * until ERR_WOULD_BLOCK instead keeps the caller there for as long as a
+ * directory keeps changing. The descriptor may also be readable with nothing
+ * to report, as on Linux after an entry is released, where the kernel
+ * acknowledges it: the poll then says ERR_WOULD_BLOCK.
  */
 
 #include <stddef.h>
@@ -86,9 +90,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_dirwatch_create(
 
 /*
  * Borrowed readable descriptor, valid until destroy and never closed by the
- * caller; -1 for NULL. Watch it in a loop for READ, then poll until
- * ERR_WOULD_BLOCK. Both the inotify descriptor and the kqueue are watchable
- * by every loop backend of their host.
+ * caller; -1 for NULL. Watch it in a loop for READ, then poll, and again
+ * only while a call fills its array. Both the inotify descriptor and the
+ * kqueue are watchable by every loop backend of their host.
  */
 int maelys_sys_dirwatch_fd(const maelys_sys_dirwatch_t *dirwatch);
 
@@ -120,14 +124,18 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_dirwatch_remove(
     maelys_sys_dirwatch_entry_t entry);
 
 /*
- * Never blocks. Takes what the kernel holds, coalesces per entry and fills at
- * most capacity changes, each entry at most once. ERR_WOULD_BLOCK when
- * nothing is pending, the normal state; *out_count is then 0. Changes that
- * do not fit stay pending for a later call, and entries are served in turn,
- * so one that keeps changing cannot hold the others back. An entry whose
- * GONE this call delivers is released before the call returns; a GONE that
- * did not fit keeps its entry live until delivered. changes must hold
- * capacity elements, capacity at least 1.
+ * Never blocks, and does not wait for the directories to fall quiet: it
+ * takes what the kernel held when the call began, coalesces per entry and
+ * fills at most capacity changes, each entry at most once. What the kernel
+ * takes in during the call is left for the next one and keeps the descriptor
+ * readable. So one call costs what was queued, bounded by the kernel's own
+ * queue on Linux and by entry_capacity on macOS, however fast anyone writes.
+ * ERR_WOULD_BLOCK when nothing is pending, the normal state; *out_count is
+ * then 0. Changes that do not fit stay pending for a later call, and entries
+ * are served in turn, so one that keeps changing cannot hold the others
+ * back. An entry whose GONE this call delivers is released before the call
+ * returns; a GONE that did not fit keeps its entry live until delivered.
+ * changes must hold capacity elements, capacity at least 1.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_dirwatch_poll(
     maelys_sys_dirwatch_t *dirwatch,

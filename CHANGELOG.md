@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.12.1 - 2026-10-06
+
+- `maelys_sys_dirwatch_poll` no longer follows a writer. 0.12.0 emptied the
+  kernel before it returned: until the inotify queue was empty on Linux, for
+  as long as batches of 64 came back full on macOS. Whoever may write in a
+  watched directory could so hold the owner thread, often a loop's, inside
+  one call. A call now takes what the kernel held when it began, the size of
+  the inotify queue read once on Linux, one batch per 64 entries and one
+  more on macOS, and leaves the rest queued, where it keeps the descriptor
+  readable. Nothing is lost and nothing is reported differently.
+- The entry of a kernel event is found without walking the table: the slot
+  comes back with the event on macOS, and an index by watch number gives it
+  on Linux, for a watch already released as for a live one. 0.12.0 walked
+  every entry for every event.
+  Measured on Linux 6.10 with writers that never stop, the longest of
+  twenty calls: with 16384 entries and ten writers in one directory, 0.12.0
+  did not return within 8 s and 0.12.1 takes 2 ms; with the ten writers in
+  ten directories, emptying only what was queued still took 0.4 s while
+  every event walked the table, and takes 3 ms.
+- The contract no longer tells the caller to poll until `ERR_WOULD_BLOCK`,
+  which rebuilds the same wait one level up. Poll again only while a call
+  fills its array: a call that returns fewer changes than its capacity has
+  delivered all the handle held, and the descriptor answers for the rest.
+  A caller written to the 0.12.0 sentence stays correct and loses nothing;
+  it stays in its own loop for as long as a directory keeps changing.
+- The installed archive and the Homebrew formula now watch a directory and
+  read one change, where they only created a loop: the component added last
+  is exercised through what a consumer receives.
+- Mutation gate at sixty-four, nineteen of them on directory watching.
+
 ## 0.12.0 - 2026-10-06
 
 - Directory watching, `maelys/sys/dirwatch.h`: "the entries of this

@@ -200,6 +200,19 @@ run_mutant dirwatch-overflow-marks-one-entry src/dirwatch.c \
 run_mutant dirwatch-owner-unchecked src/dirwatch.c \
     'return pthread_equal(dirwatch->owner, pthread_self());' \
     'return pthread_equal(dirwatch->owner, dirwatch->owner);'
+run_mutant_linux dirwatch-follows-the-writer src/dirwatch.c \
+    'while (taken < owed) {' 'while (taken < owed || owed) {'
+run_mutant_linux dirwatch-first-cell-taken-for-the-watch src/dirwatch.c \
+    'if (entry->wd == wd) return entry;' 'if (entry->wd) return entry;'
+run_mutant_linux dirwatch-index-gap-left src/dirwatch.c \
+    'if (((at - home) & mask) >= ((at - hole) & mask)) {' \
+    'if (((at - home) & mask) > mask) {'
+run_mutant_darwin dirwatch-follows-the-writer src/dirwatch.c \
+    'size_t batches = dirwatch->capacity / BATCH + 1u;' \
+    'size_t batches = SIZE_MAX;'
+run_mutant_darwin dirwatch-event-slot-ignored src/dirwatch.c \
+    'size_t index = (size_t)(uintptr_t)event->udata;' \
+    'size_t index = (size_t)(uintptr_t)event->udata * 0u;'
 run_mutant_linux dirwatch-write-in-place-reported src/dirwatch.c \
     '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)' \
     '#define DIRWATCH_ENTRIES (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE)'

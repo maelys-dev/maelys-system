@@ -19,11 +19,35 @@ class LibmaelysSys < Formula
 
   test do
     (testpath/"smoke.c").write <<~EOS
+      #define _POSIX_C_SOURCE 200809L
       #include <maelys/sys.h>
+      #include <fcntl.h>
+      #include <sys/stat.h>
+      #include <unistd.h>
       int main(void) {
         maelys_sys_loop_t *loop = 0;
-        if (maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop)) return 1;
-        return maelys_sys_loop_destroy(&loop);
+        if (maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) != MAELYS_SYS_OK) return 1;
+        if (maelys_sys_loop_destroy(&loop) != MAELYS_SYS_OK) return 2;
+        /* The component added last, through what was installed: a directory
+         * watched, one member created, that one change reported. */
+        maelys_sys_dirwatch_t *dirwatch = 0;
+        maelys_sys_dirwatch_entry_t entry = 0;
+        maelys_sys_dirwatch_change_t change;
+        size_t count = 0;
+        uint64_t deadline = 0;
+        unsigned ready = 0;
+        if (mkdir("watched", 0700) != 0) return 3;
+        if (maelys_sys_dirwatch_create(1, &dirwatch) != MAELYS_SYS_OK) return 4;
+        if (maelys_sys_dirwatch_add(dirwatch, "watched", 7, &entry) != MAELYS_SYS_OK) return 5;
+        int fd = open("watched/member", O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd < 0 || close(fd) != 0) return 6;
+        if (maelys_sys_deadline_after(3000, &deadline) != MAELYS_SYS_OK) return 7;
+        if (maelys_sys_fd_wait(maelys_sys_dirwatch_fd(dirwatch), MAELYS_SYS_INTEREST_READ,
+            deadline, &ready) != MAELYS_SYS_OK) return 8;
+        if (maelys_sys_dirwatch_poll(dirwatch, &change, 1, &count) != MAELYS_SYS_OK) return 9;
+        if (count != 1 || change.token != 7 || change.entry != entry ||
+          change.flags != MAELYS_SYS_DIRWATCH_CHANGED) return 10;
+        return maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK ? 0 : 11;
       }
     EOS
     system ENV.cc, "-std=c11", "-pthread", "smoke.c", "-I#{include}", "-L#{lib}",

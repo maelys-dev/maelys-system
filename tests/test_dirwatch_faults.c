@@ -20,10 +20,42 @@
 
 #define PATH_ROOM 512
 
+#include <poll.h>
+
 static const char *fault_step;
 static int fault_errno;
 
+/* A writer that never rests, made deterministic: before each of the next
+ * feeds_left reads of the kernel, every hot directory changes again. */
+enum { HOT = 128, FEEDS = 16 };
+static char hot[HOT][PATH_ROOM];
+static int hot_member[HOT];
+static int feeds_left;
+static int feed_failed;
+static int reads_seen;
+
+static void change_every_hot_directory(void) {
+    char member[PATH_ROOM];
+    for (size_t index = 0; index < HOT; ++index) {
+        if (snprintf(member, sizeof(member), "%s/m", hot[index]) <= 0) feed_failed = 1;
+        if (hot_member[index]) {
+            if (unlink(member) != 0) feed_failed = 1;
+        } else {
+            int fd = open(member, O_WRONLY | O_CREAT | O_EXCL, 0600);
+            if (fd < 0 || close(fd) != 0) feed_failed = 1;
+        }
+        hot_member[index] = !hot_member[index];
+    }
+}
+
 static int dirwatch_fault(const char *step) {
+    if (strcmp(step, "read") == 0) {
+        ++reads_seen;
+        if (feeds_left > 0) {
+            --feeds_left;
+            change_every_hot_directory();
+        }
+    }
     if (!fault_step || strcmp(step, fault_step) != 0) return 0;
     fault_step = NULL;
     errno = fault_errno;
@@ -86,6 +118,62 @@ static int test_overflow(void) {
     return 0;
 }
 
+/*
+ * Directories that change again before every read of the kernel: one poll
+ * takes what was queued when it began and returns. It does not follow the
+ * writer, which would hold the owner thread for as long as the writer
+ * pleases. What it left keeps the descriptor readable, and nothing is lost.
+ */
+static int test_poll_does_not_follow_a_writer(void) {
+    maelys_sys_dirwatch_t *dirwatch = NULL;
+    maelys_sys_dirwatch_entry_t entry = 0;
+    static maelys_sys_dirwatch_change_t changes[HOT];
+    CHECK(maelys_sys_dirwatch_create(HOT, &dirwatch) == MAELYS_SYS_OK);
+    for (size_t index = 0; index < HOT; ++index) {
+        char name[32];
+        CHECK(snprintf(name, sizeof(name), "hot-%zu", index) > 0);
+        CHECK(in(root, name, hot[index]) && mkdir(hot[index], 0700) == 0);
+        CHECK(maelys_sys_dirwatch_add(dirwatch, hot[index], index, &entry) == MAELYS_SYS_OK);
+        hot_member[index] = 0;
+    }
+    feed_failed = 0;
+    change_every_hot_directory();
+    reads_seen = 0;
+    feeds_left = FEEDS;
+    size_t count = 0;
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, HOT, &count) == MAELYS_SYS_OK);
+    /* One read holds what was queued on Linux; on macOS one batch of 64 per
+     * 64 entries, and one more. Following the writer takes FEEDS reads. */
+    CHECK(reads_seen >= 1 && reads_seen <= HOT / 64 + 1);
+    CHECK(feeds_left == FEEDS - reads_seen && !feed_failed);
+    CHECK(count == HOT);
+    for (size_t position = 0; position < count; ++position) {
+        CHECK(changes[position].flags == MAELYS_SYS_DIRWATCH_CHANGED);
+    }
+    /* The writer was heard after the call began: the kernel still holds it. */
+    struct pollfd readable = {maelys_sys_dirwatch_fd(dirwatch), POLLIN, 0};
+    CHECK(poll(&readable, 1, 0) == 1 && (readable.revents & POLLIN));
+    feeds_left = 0;
+    int calls = 0;
+    size_t later = 0;
+    maelys_sys_result_t result;
+    while ((result = maelys_sys_dirwatch_poll(dirwatch, changes, HOT, &count)) ==
+        MAELYS_SYS_OK) {
+        later += count;
+        CHECK(++calls <= 8);
+    }
+    CHECK(result == MAELYS_SYS_ERR_WOULD_BLOCK && later >= 1u);
+    CHECK(poll(&readable, 1, 0) == 0);
+    CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
+    for (size_t index = 0; index < HOT; ++index) {
+        char member[PATH_ROOM];
+        CHECK(in(hot[index], "m", member));
+        if (hot_member[index]) CHECK(unlink(member) == 0);
+        CHECK(rmdir(hot[index]) == 0);
+    }
+    return 0;
+}
+
 /* The kernel refusing the handle, the registration or the read: each is
  * reported with its errno and leaves nothing open nor half-made. */
 static int test_kernel_refusals(void) {
@@ -115,6 +203,14 @@ static int test_kernel_refusals(void) {
     CHECK(fd >= 0 && close(fd) == 0);
     maelys_sys_dirwatch_change_t change;
     size_t count = 9;
+#if defined(__linux__)
+    /* Linux asks the kernel how much is queued before it reads any. */
+    arm("size", ENOTTY);
+    errno = 0;
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, &change, 1u, &count) == MAELYS_SYS_ERR_OS);
+    CHECK(errno == ENOTTY && count == 0u);
+    count = 9;
+#endif
     arm("read", EIO);
     errno = 0;
     CHECK(maelys_sys_dirwatch_poll(dirwatch, &change, 1u, &count) == MAELYS_SYS_ERR_OS);
@@ -134,12 +230,14 @@ int main(void) {
     if (!base || base[0] != '/') base = "/tmp";
     int written = snprintf(root, sizeof(root), "%s/maelys-sys-dirwatch-faults.XXXXXX", base);
     if (written <= 0 || (size_t)written >= sizeof(root) || !mkdtemp(root)) return 1;
-    if (test_overflow() || test_kernel_refusals()) return 1;
+    if (test_overflow() || test_poll_does_not_follow_a_writer() ||
+        test_kernel_refusals()) return 1;
     if (rmdir(root) != 0) {
         fprintf(stderr, "work directory not empty: %s\n", root);
         return 1;
     }
     puts("ok - dirwatch overflow marks every live entry once");
+    puts("ok - dirwatch poll takes what was queued and does not follow a writer");
     puts("ok - dirwatch kernel refusals reported, nothing left open");
     return 0;
 }

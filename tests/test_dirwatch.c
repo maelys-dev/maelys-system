@@ -289,6 +289,88 @@ static int test_coalescing_and_turns(void) {
 }
 
 /* The directory itself leaving: removed, or renamed. */
+/* Creates the member "m" of a directory, or removes it: one change. */
+static int flip(const char *dir, int *present) {
+    char member[PATH_ROOM];
+    if (!in(dir, "m", member)) return -1;
+    int done = *present ? unlink(member) : put(member, "");
+    *present = !*present;
+    return done;
+}
+
+/*
+ * Entries removed and added many times past the capacity, beside one that
+ * stays: each change still reaches the entry of its directory, with its
+ * token, whatever numbers the kernel has come to give its registrations.
+ * A directory no longer watched says nothing, not even what the kernel had
+ * queued for it before the remove.
+ */
+static int test_entries_replaced(void) {
+    enum { LIVE = 4, DIRS = 7, ROUNDS = 15 };
+    char keep[PATH_ROOM], dirs[DIRS][PATH_ROOM];
+    int keep_present = 0, present[DIRS] = {0};
+    maelys_sys_dirwatch_t *dirwatch = NULL;
+    maelys_sys_dirwatch_entry_t kept = 0, entries[DIRS] = {0};
+    CHECK(maelys_sys_dirwatch_create(LIVE, &dirwatch) == MAELYS_SYS_OK);
+    CHECK(in(root, "kept", keep) && mkdir(keep, 0700) == 0);
+    CHECK(maelys_sys_dirwatch_add(dirwatch, keep, 1000u, &kept) == MAELYS_SYS_OK);
+    for (size_t index = 0; index < DIRS; ++index) {
+        char name[32];
+        CHECK(snprintf(name, sizeof(name), "replaced-%zu", index) > 0);
+        CHECK(in(root, name, dirs[index]) && mkdir(dirs[index], 0700) == 0);
+    }
+    for (size_t index = 0; index < LIVE - 1u; ++index) {
+        CHECK(maelys_sys_dirwatch_add(dirwatch, dirs[index], index, &entries[index]) ==
+            MAELYS_SYS_OK);
+    }
+    for (size_t round = 0; round < ROUNDS; ++round) {
+        size_t oldest = round % DIRS, newest = (round + LIVE - 1u) % DIRS;
+        /* A change the kernel still holds for an entry goes with the entry. */
+        CHECK(flip(dirs[oldest], &present[oldest]) == 0);
+        CHECK(maelys_sys_dirwatch_remove(dirwatch, entries[oldest]) == MAELYS_SYS_OK);
+        entries[oldest] = 0;
+        CHECK(maelys_sys_dirwatch_add(dirwatch, dirs[newest], newest, &entries[newest]) ==
+            MAELYS_SYS_OK);
+        CHECK(flip(keep, &keep_present) == 0);
+        for (size_t index = 0; index < DIRS; ++index) {
+            CHECK(flip(dirs[index], &present[index]) == 0);
+        }
+        size_t got = 0;
+        unsigned seen = 0;
+        for (int attempt = 0; got < LIVE; ++attempt) {
+            maelys_sys_dirwatch_change_t changes[LIVE];
+            size_t count = 0;
+            CHECK(attempt < 16);
+            /* Readable with nothing to say: Linux acknowledging the remove. */
+            maelys_sys_result_t result = next(dirwatch, changes, LIVE, &count);
+            CHECK(result == MAELYS_SYS_OK || result == MAELYS_SYS_ERR_WOULD_BLOCK);
+            for (size_t position = 0; position < count; ++position) {
+                size_t which = DIRS;
+                CHECK(changes[position].flags == CHANGED);
+                if (changes[position].entry != kept) {
+                    for (which = 0; which < DIRS; ++which) {
+                        if (entries[which] && entries[which] == changes[position].entry) break;
+                    }
+                    CHECK(which < DIRS);
+                }
+                CHECK(changes[position].token == (which == DIRS ? 1000u : which));
+                CHECK(!(seen & (1u << which)));
+                seen |= 1u << which;
+            }
+            got += count;
+        }
+        CHECK(got == LIVE && nothing_pending(dirwatch));
+    }
+    CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
+    if (keep_present) CHECK(flip(keep, &keep_present) == 0);
+    CHECK(rmdir(keep) == 0);
+    for (size_t index = 0; index < DIRS; ++index) {
+        if (present[index]) CHECK(flip(dirs[index], &present[index]) == 0);
+        CHECK(rmdir(dirs[index]) == 0);
+    }
+    return 0;
+}
+
 static int test_gone(void) {
     char removed[PATH_ROOM], renamed[PATH_ROOM], elsewhere[PATH_ROOM];
     CHECK(in(root, "gone-removed", removed) && in(root, "gone-renamed", renamed));
@@ -572,7 +654,7 @@ int main(void) {
     if (written <= 0 || (size_t)written >= sizeof(root) || !mkdtemp(root)) return 1;
     int before = count_open();
     int failed = test_arguments() || test_entries_reported() || test_not_reported() ||
-        test_coalescing_and_turns() || test_gone() || test_follows_directory() ||
+        test_coalescing_and_turns() || test_entries_replaced() || test_gone() || test_follows_directory() ||
         test_refusals() ||
 #if defined(__APPLE__)
         test_descriptor_limit() ||
@@ -591,6 +673,7 @@ int main(void) {
     puts("ok - dirwatch reports creation, removal, rename and replacement by rename");
     puts("ok - dirwatch reports no write in place, metadata or subdirectory content");
     puts("ok - dirwatch coalesces and serves entries in turn");
+    puts("ok - dirwatch entries replaced past the capacity keep their changes apart");
     puts("ok - dirwatch GONE releases at delivery; numbers never reused");
     puts("ok - dirwatch follows the directory, not its path");
     puts("ok - dirwatch one entry per directory; links, files and missing paths refused");
