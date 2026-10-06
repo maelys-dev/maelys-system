@@ -58,7 +58,9 @@ const char *maelys_sys_loop_backend_name(const maelys_sys_loop_t *loop);
 
 /*
  * The loop borrows fd, a stream descriptor: a socket, pipe, FIFO, terminal
- * or device. A regular file is refused by epoll and always ready
+ * or device, or the descriptor of a maelys_sys_dirwatch_t, which is an
+ * inotify instance on Linux and a kqueue on macOS and is watchable by every
+ * backend of its host. A regular file is refused by epoll and always ready
  * elsewhere; it is not a watchable object. The owner must unwatch before
  * closing the descriptor. Should it close first, unwatch still releases
  * the registration and reports OK; on Linux a dup of that descriptor

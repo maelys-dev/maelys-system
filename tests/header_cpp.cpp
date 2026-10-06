@@ -14,6 +14,8 @@ int main() {
     (void)expectations; (void)lock_options;
     maelys_sys_fdpass_flags_t fdpass_flags = MAELYS_SYS_FDPASS_SURPLUS;
     (void)fdpass_flags;
+    maelys_sys_dirwatch_change_t dirwatch_change{};
+    (void)dirwatch_change;
     return result == MAELYS_SYS_OK && socket_handle == nullptr &&
         state == MAELYS_SYS_CONNECT_IN_PROGRESS && options.reuse_address == 0
         ? 0 : 1;

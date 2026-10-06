@@ -19,7 +19,11 @@ wait and a deadline-free condition wait, and moves the Linux wakeup to an
 eventfd; 0.9.1 anchors both parents of a publication by descriptor. The
 0.10 line adds descriptor passing over AF_UNIX datagrams, in a unit that
 stands alone so that a client linked into a confined process can compile it
-without linking the library.
+without linking the library. The 0.11 line adds the stream variant of that
+passing and makes a byte-only receive on a Unix socket close what a peer
+attaches. The 0.12 line adds directory watching, "the entries of this
+directory changed: reread it", asked of inotify and of kqueue in the same
+terms so that both hosts answer alike.
 
 The reactor owns registrations and timer bookkeeping. It never
 owns watched descriptors and never runs domain callbacks. Egress and Orchestrator

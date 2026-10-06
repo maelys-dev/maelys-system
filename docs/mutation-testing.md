@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies forty-five one-line faults, four of them on Linux only
-and three on macOS only, and
+directories, applies fifty-nine one-line faults, nine of them on Linux only
+and seven on macOS only, and
 requires the existing tests to reject every mutant. Nine target the reactor:
 
 - generation increment removed;
@@ -66,6 +66,16 @@ three system calls per descriptor.
 Five target partial stream operations (0.11): losing the send byte count,
 accepting a blocking socket, accepting empty rights-bearing sends, hiding
 EINTR by retrying, and hiding unexpected ancillary data (Linux credentials).
+
+Fourteen target directory watching (0.12). Five hold on both hosts: an
+entry kept after its GONE was delivered; a change not cleared once
+delivered; entries no longer served in turn; an overflow marking one entry
+instead of all; and the owner thread left unchecked. The others are the
+same four faults written once per kernel interface, and a fifth on Linux:
+metadata reported, which the other host would not; a renamed directory
+kept as if nothing happened; the same directory admitted twice; a final
+symbolic link followed; and, on Linux only, a write in place reported,
+which kqueue cannot.
 
 The sweep is deterministic and has a 60-second process timeout per mutant. A
 changed implementation must update anchors and preserve or strengthen the
