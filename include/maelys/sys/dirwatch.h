@@ -33,14 +33,22 @@
  * the absence of GONE does not say that the path still names this directory.
  *
  * The descriptor says what the kernel holds, not what this object still owes
- * the caller. A poll that fills its array may leave changes pending here with
- * nothing to wake the loop: poll again. A poll that returns fewer changes
- * than capacity has delivered all this object held, and what the kernel took
- * in meanwhile keeps the descriptor readable: go back to the loop. Polling
- * until ERR_WOULD_BLOCK instead keeps the caller there for as long as a
- * directory keeps changing. The descriptor may also be readable with nothing
- * to report, as on Linux after an entry is released, where the kernel
- * acknowledges it: the poll then says ERR_WOULD_BLOCK.
+ * the caller. Give poll an array of entry_capacity elements and call it once
+ * each time the descriptor is readable: an entry is reported at most once
+ * per call, so that array always fits, nothing stays pending here, and what
+ * the kernel took in meanwhile keeps the descriptor readable. That is one
+ * bounded call per turn of the loop, however fast anyone writes.
+ *
+ * With a smaller array, a call that fills it may leave changes pending here
+ * with nothing to wake the loop. Poll again then, but a counted number of
+ * times: while enough directories keep changing every call fills the array,
+ * so "until a call does not fill it" may never come, and "until
+ * ERR_WOULD_BLOCK" even less. A caller that stops on a full array arranges
+ * its own return, a timer due at once, and does not wait on the descriptor.
+ *
+ * The descriptor may also be readable with nothing to report, as on Linux
+ * after an entry is released, where the kernel acknowledges it: the poll
+ * then says ERR_WOULD_BLOCK.
  */
 
 #include <stddef.h>
@@ -90,8 +98,8 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_dirwatch_create(
 
 /*
  * Borrowed readable descriptor, valid until destroy and never closed by the
- * caller; -1 for NULL. Watch it in a loop for READ, then poll, and again
- * only while a call fills its array. Both the inotify descriptor and the
+ * caller; -1 for NULL. Watch it in a loop for READ, then poll once with an
+ * array of entry_capacity elements. Both the inotify descriptor and the
  * kqueue are watchable by every loop backend of their host.
  */
 int maelys_sys_dirwatch_fd(const maelys_sys_dirwatch_t *dirwatch);
