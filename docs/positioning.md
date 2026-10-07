@@ -17,7 +17,10 @@ It is not a smaller clone of libuv or libevent. The distinction is intentional:
 
 The following do not belong in the 0.x product:
 
-- TLS, HTTP, DNS, filesystem watchers or stream abstractions;
+- TLS, HTTP, DNS or stream abstractions;
+- recursive filesystem watching, file names in events, or the content and
+  metadata of files: 0.12 watches the entries of one directory, "reread
+  it", and nothing finer;
 - process spawning, child supervision or sandbox policy;
 - Windows, IOCP or WFP support;
 - JSON, MCP, receipts or other domain types; and

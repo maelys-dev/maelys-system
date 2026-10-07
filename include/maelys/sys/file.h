@@ -242,7 +242,13 @@ typedef struct maelys_sys_publish_options {
  * With sync_parent, an ERR_OS from the sync means the file is published
  * and its entry may not be durable: a retry of the same call reports
  * ERR_NOT_FOUND, the staging having moved, and directory_sync on the
- * parent completes the durability. options may be NULL.
+ * parent completes the durability. ERR_OS alone does not say which of the
+ * two calls failed; the staging does: still in place, nothing was
+ * published; gone, the file is published and only its durability is owed.
+ * A caller that wants each step to answer for itself publishes without
+ * sync_parent, then calls directory_sync on the parent; that sync reopens
+ * the parent by its path, where the single call keeps the descriptor it
+ * opened before the rename. options may be NULL.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_file_publish_noreplace(
     const char *staging,

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.12.2 - 2026-10-07
+
+Contracts corrected after a consumer read 0.12.1. No function, structure or
+result code changes, and no behaviour: the library does what it did.
+
+- `dirwatch.h` told the caller to poll again while a call fills its array.
+  That has no end of its own either: while enough directories keep changing,
+  every call fills the array. On Linux 6.10, eight directories written
+  without pause and a caller that rereads each changed directory for 200
+  microseconds: 100 full calls in a row with an array of four, 306 with an
+  array of eight, before chance let it go. The rule is now the one the code
+  already kept: give poll an array of `entry_capacity` elements and call it
+  once each time the descriptor is readable. An entry is reported at most
+  once per call, so nothing stays pending in the handle and the descriptor
+  answers for the rest. A caller with a smaller array counts its calls and
+  arranges its own return, since the descriptor does not answer for what the
+  handle still holds. Both halves are now tested: nothing owed after one
+  call with an array of the capacity; thirty-two full calls in a row with a
+  smaller one, then a quiet descriptor while changes are still owed.
+- What directory watching does not replace, said where 0.12.0 named cx: a
+  write in place is reported on neither host, so a caller that reads the end
+  of files that grow in place keeps its own reads of their size and date.
+  Directory watching tells it that such a file appeared, was removed or was
+  replaced by rename. On macOS each entry holds one descriptor: a caller
+  that watches more than about two hundred directories raises its limit.
+- `wakeup.h` says what a wakeup is for: from one thread to the loop of
+  another, never from a signal handler. On macOS signal and consume take a
+  mutex, and a handler that interrupts either waits for a lock that will not
+  be released. A handler writes one byte to a non-blocking pipe of its own.
+- `file.h`: after a publish with `sync_parent`, `ERR_OS` alone does not say
+  whether the rename or the sync failed. The staging does, and the contract
+  now says so; it also names the two-call form, publish then
+  `directory_sync`, for a caller that wants each step to answer for itself,
+  with what that form gives up: the parent is reopened by its path.
+- `docs/positioning.md` still excluded filesystem watchers from 0.x. It now
+  excludes what 0.12 does not do: recursion, file names in events, the
+  content and metadata of files.
+
 ## 0.12.1 - 2026-10-06
 
 - `maelys_sys_dirwatch_poll` no longer follows a writer. 0.12.0 emptied the

@@ -150,6 +150,9 @@ static int test_poll_does_not_follow_a_writer(void) {
     for (size_t position = 0; position < count; ++position) {
         CHECK(changes[position].flags == MAELYS_SYS_DIRWATCH_CHANGED);
     }
+    /* An array of the capacity took all this object held: what is owed now
+     * is in the kernel, and the descriptor answers for it. */
+    for (size_t index = 0; index < HOT; ++index) CHECK(!dirwatch->entries[index].pending);
     /* The writer was heard after the call began: the kernel still holds it. */
     struct pollfd readable = {maelys_sys_dirwatch_fd(dirwatch), POLLIN, 0};
     CHECK(poll(&readable, 1, 0) == 1 && (readable.revents & POLLIN));
@@ -164,6 +167,32 @@ static int test_poll_does_not_follow_a_writer(void) {
     }
     CHECK(result == MAELYS_SYS_ERR_WOULD_BLOCK && later >= 1u);
     CHECK(poll(&readable, 1, 0) == 0);
+
+    /* A smaller array under the same writer: every call fills it, so a
+     * caller that polls "until a call does not fill it" has no end of its
+     * own. FULL calls are counted here; the writer could go on. */
+    enum { SMALL = 4, FULL = 32 };
+    change_every_hot_directory();
+    feeds_left = FULL * (HOT / 64 + 1);
+    for (int call = 0; call < FULL; ++call) {
+        CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, SMALL, &count) == MAELYS_SYS_OK);
+        CHECK(count == SMALL);
+    }
+    CHECK(!feed_failed);
+    /* The writer stops and one more call empties the kernel: the descriptor
+     * falls quiet while this object still owes changes. Nothing wakes a
+     * caller that waits on it now. */
+    feeds_left = 0;
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, SMALL, &count) == MAELYS_SYS_OK);
+    CHECK(count == SMALL && poll(&readable, 1, 0) == 0);
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, SMALL, &count) == MAELYS_SYS_OK);
+    CHECK(count == SMALL);
+    /* The array of the capacity ends it in one call. */
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, HOT, &count) == MAELYS_SYS_OK);
+    CHECK(count >= 1u && count < HOT);
+    for (size_t index = 0; index < HOT; ++index) CHECK(!dirwatch->entries[index].pending);
+    CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, HOT, &count) ==
+        MAELYS_SYS_ERR_WOULD_BLOCK);
     CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
     for (size_t index = 0; index < HOT; ++index) {
         char member[PATH_ROOM];
@@ -238,6 +267,7 @@ int main(void) {
     }
     puts("ok - dirwatch overflow marks every live entry once");
     puts("ok - dirwatch poll takes what was queued and does not follow a writer");
+    puts("ok - dirwatch an array of the capacity leaves nothing owed; a smaller one can stay full");
     puts("ok - dirwatch kernel refusals reported, nothing left open");
     return 0;
 }
