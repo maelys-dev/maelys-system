@@ -32,6 +32,12 @@
  * its ancestors yields nothing on either host, and the entry stays live: so
  * the absence of GONE does not say that the path still names this directory.
  *
+ * A handle does not cross fork(2). On macOS the child does not inherit the
+ * kqueue. On Linux the child shares the parent's inotify instance: a remove
+ * or a destroy there takes the watch from the parent, which is told GONE
+ * for a directory that has not moved. A child that goes on to exec touches
+ * no handle.
+ *
  * The descriptor says what the kernel holds, not what this object still owes
  * the caller. Give poll an array of entry_capacity elements and call it once
  * each time the descriptor is readable: an entry is reported at most once

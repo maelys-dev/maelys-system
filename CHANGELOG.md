@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.12.3 - 2026-10-07
+
+Every public header read against three questions: which thread may call,
+whether a signal handler may, and what is already done when an error comes
+back. No function, structure or result code changes, and no behaviour; what
+changes is what the headers say, and two differences between the hosts that
+were measured on the way and are now tested.
+
+- `loop.h`: `wake` and `stop` are never called from a signal handler. They
+  go through the loop's wakeup, which takes a mutex on macOS, exactly as
+  0.12.2 said of `wakeup.h`; stopping a loop on a signal is the first place
+  a caller would try it. No Maelys consumer does. The header also says what
+  it left to the code: an owner-thread call from another thread is
+  `ERR_STATE`, `destroy` waits for no thread inside `wake` or `stop`, and an
+  `ERR_OS` from `step` reports no event and loses none.
+- A loop and a directory watch do not cross `fork`, and the hosts differ in
+  how it fails. Measured: on Linux the child shares the parent's epoll and
+  inotify instances, so an `unwatch` in the child leaves the parent's loop
+  silent on a readable descriptor, and a `remove` in the child has the
+  parent told `GONE` for a directory that has not moved. On macOS the child
+  does not inherit the kqueue and the parent is untouched. Both are tested
+  on both hosts.
+- `clock.h` says which clocks are read and where the hosts part: on macOS
+  the monotonic clock goes on while the machine sleeps (86260 s of sleep
+  counted on the host that measured it); Linux documents that it leaves
+  suspend out, which nothing here observes. A deadline is not the same
+  bound on the two.
+- `thread.h` had no contract. A mutex is the default kind: a thread that
+  locks one it already holds waits for ever, measured on both hosts. A
+  thread is joined exactly once and never detached. The destruction rules
+  the README carried are in the header.
+- `fd.h`: when `maelys_sys_socket_send_all_until` fails, a deadline
+  included, part of the buffer may be sent and the call does not say how
+  much. The stream has lost its place; the header now says to close it.
+- `socket.h`: "owner-thread-confined" was a rule nothing checks, unlike the
+  loop. The header says so.
+
 ## 0.12.2 - 2026-10-07
 
 Contracts corrected after a consumer read 0.12.1. No function, structure or

@@ -20,7 +20,9 @@ typedef enum maelys_sys_connect_state {
 /*
  * Creates an owned POSIX socket which is non-blocking, close-on-exec and
  * protected against SIGPIPE before it is returned. No DNS, address selection
- * or retry policy is performed. The handle is owner-thread-confined.
+ * or retry policy is performed. The handle belongs to one thread at a time
+ * and holds no lock: unlike a loop, nothing checks it, and two threads on
+ * one handle race unseen.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_create(
     int domain,

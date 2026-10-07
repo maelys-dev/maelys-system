@@ -72,6 +72,10 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_fd_wait(
  * send_nosigpipe, whichever reports it first (macOS shows a reset as HUP
  * without WRITE and answers EPIPE to send; SO_ERROR is read to tell); once
  * reported it is consumed and the socket is ERR_CLOSED thereafter.
+ * Whatever the failure, a deadline included, part of the buffer may be sent
+ * already and the call does not say how much: the stream has lost its place
+ * and the caller closes it. A caller that must keep its place sends with
+ * send_nosigpipe, which counts.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_send_all_until(
     int fd,
