@@ -61,7 +61,7 @@ TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
-EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup
+EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch
 EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 

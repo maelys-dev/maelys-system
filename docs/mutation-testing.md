@@ -1,9 +1,12 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies sixty-four one-line faults, twelve of them on Linux only
+directories, applies sixty-eight one-line faults, twelve of them on Linux only
 and nine on macOS only, and
-requires the existing tests to reject every mutant. Nine target the reactor:
+requires the existing tests to reject every mutant. Thirteen target the
+reactor, the last four its fairness between timers and descriptors (0.12.3):
+a due timer excusing the step from asking the kernel, timers keeping no
+place on their turn, and either side always going first. The first nine:
 
 - generation increment removed;
 - stale watch generation accepted;
