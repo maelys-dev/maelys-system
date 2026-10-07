@@ -9,6 +9,19 @@
 extern "C" {
 #endif
 
+/*
+ * Milliseconds. monotonic_ms reads CLOCK_MONOTONIC: it never goes back, its
+ * origin is arbitrary, and every deadline of this library is one of its
+ * values. wall_ms reads CLOCK_REALTIME, which an administrator or a time
+ * daemon moves: a date to show or to store, never a deadline.
+ *
+ * The hosts disagree about a machine that sleeps. On macOS the monotonic
+ * clock goes on during sleep, measured. Linux documents that
+ * CLOCK_MONOTONIC leaves suspend out, which nothing here observes. So a
+ * deadline bounds time on the wall on macOS and time the system was running
+ * on Linux; a caller that must bound one of the two on both hosts measures
+ * it itself.
+ */
 #define MAELYS_SYS_DEADLINE_INFINITE UINT64_MAX
 
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_monotonic_ms(uint64_t *out_value);

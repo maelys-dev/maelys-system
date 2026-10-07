@@ -18,6 +18,7 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define CHECK(condition) do { \
@@ -371,6 +372,43 @@ static int test_entries_replaced(void) {
     return 0;
 }
 
+/*
+ * A handle does not cross fork, and the hosts differ in how it fails: the
+ * child shares the parent's inotify instance on Linux, so its remove takes
+ * the watch from the parent, which is told GONE for a directory that has
+ * not moved; the kqueue is not inherited, and there the parent still hears
+ * the directory.
+ */
+static int test_forked_child_removes(void) {
+    char dir[PATH_ROOM], member[PATH_ROOM];
+    maelys_sys_dirwatch_t *dirwatch = NULL;
+    maelys_sys_dirwatch_entry_t entry = 0;
+    CHECK(in(root, "forked", dir) && mkdir(dir, 0700) == 0 && in(dir, "m", member));
+    CHECK(maelys_sys_dirwatch_create(1u, &dirwatch) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_dirwatch_add(dirwatch, dir, 5u, &entry) == MAELYS_SYS_OK);
+    pid_t child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        _exit(maelys_sys_dirwatch_remove(dirwatch, entry) == MAELYS_SYS_OK ? 0 : 1);
+    }
+    int status = 0;
+    CHECK(waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(put(member, "") == 0);
+    maelys_sys_dirwatch_change_t change;
+    size_t count = 0;
+    CHECK(next(dirwatch, &change, 1u, &count) == MAELYS_SYS_OK && count == 1u);
+    CHECK(change.entry == entry && change.token == 5u);
+#if defined(__linux__)
+    CHECK(change.flags == GONE);
+#else
+    CHECK(change.flags == CHANGED);
+#endif
+    CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
+    CHECK(unlink(member) == 0 && rmdir(dir) == 0);
+    return 0;
+}
+
 static int test_gone(void) {
     char removed[PATH_ROOM], renamed[PATH_ROOM], elsewhere[PATH_ROOM];
     CHECK(in(root, "gone-removed", removed) && in(root, "gone-renamed", renamed));
@@ -654,7 +692,8 @@ int main(void) {
     if (written <= 0 || (size_t)written >= sizeof(root) || !mkdtemp(root)) return 1;
     int before = count_open();
     int failed = test_arguments() || test_entries_reported() || test_not_reported() ||
-        test_coalescing_and_turns() || test_entries_replaced() || test_gone() || test_follows_directory() ||
+        test_coalescing_and_turns() || test_entries_replaced() ||
+        test_forked_child_removes() || test_gone() || test_follows_directory() ||
         test_refusals() ||
 #if defined(__APPLE__)
         test_descriptor_limit() ||
@@ -674,6 +713,7 @@ int main(void) {
     puts("ok - dirwatch reports no write in place, metadata or subdirectory content");
     puts("ok - dirwatch coalesces and serves entries in turn");
     puts("ok - dirwatch entries replaced past the capacity keep their changes apart");
+    puts("ok - dirwatch a forked child's remove takes the watch from the parent on Linux only");
     puts("ok - dirwatch GONE releases at delivery; numbers never reused");
     puts("ok - dirwatch follows the directory, not its path");
     puts("ok - dirwatch one entry per directory; links, files and missing paths refused");

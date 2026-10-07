@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /*
@@ -59,6 +60,40 @@ static int step_within(
 }
 
 /* Peer shutdown(SHUT_WR): READ|HUP, exactly, on every backend. */
+/*
+ * A loop does not cross fork, and the hosts differ in how it fails: the
+ * child shares the parent's epoll instance on Linux, so its unwatch takes
+ * the registration from the parent, which then hears nothing of a readable
+ * descriptor; the kqueue is not inherited, and poll has no kernel object,
+ * so there the parent is untouched.
+ */
+static int forked_child_unwatches(maelys_sys_loop_backend_t backend) {
+    fixture_t fixture;
+    CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 9) == 0);
+    int shared = strcmp(maelys_sys_loop_backend_name(fixture.loop), "epoll") == 0;
+    pid_t child = fork();
+    CHECK(child >= 0);
+    if (child == 0) {
+        maelys_sys_result_t result = maelys_sys_loop_unwatch(fixture.loop, fixture.watch);
+        _exit(result == MAELYS_SYS_OK ? 0 : 1);
+    }
+    int status = 0;
+    CHECK(waitpid(child, &status, 0) == child);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(write(fixture.sockets[1], "x", 1) == 1);
+    maelys_sys_event_t events[4];
+    size_t count = 0;
+    maelys_sys_step_result_t step = MAELYS_SYS_STEP_STOPPED;
+    CHECK(step_within(fixture.loop, 200, events, 4, &count, &step) == 0);
+    if (shared) {
+        CHECK(step == MAELYS_SYS_STEP_TIMEOUT && count == 0);
+    } else {
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 1 && events[0].token == 9);
+    }
+    CHECK(fixture_close(&fixture) == 0);
+    return 0;
+}
+
 static int peer_half_close(maelys_sys_loop_backend_t backend) {
     fixture_t fixture;
     CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 1) == 0);
@@ -408,6 +443,7 @@ static int run_backend(maelys_sys_loop_backend_t backend, const char *label) {
     CHECK(hup_and_error_by_host(backend) == 0);
     CHECK(receive_would_block(backend) == 0);
     CHECK(reset_on_send(backend) == 0);
+    CHECK(forked_child_unwatches(backend) == 0);
     printf("ok - %s backend parity\n", label);
     return 0;
 }

@@ -101,6 +101,14 @@ the optional umbrella header `maelys/sys.h`.
   and frees the handle without closing; a connection still in progress is
   refused so that completion stays with `connect_complete`.
 - Wakeup destruction requires all concurrent signalers to have stopped.
+- Nothing is promised to a signal handler. `maelys_sys_wakeup_signal`,
+  `maelys_sys_loop_wake` and `maelys_sys_loop_stop` take a mutex on macOS: a
+  handler writes one byte to a non-blocking pipe of the caller's own, which
+  the loop watches.
+- A loop and a directory watch do not cross `fork`. macOS does not give the
+  child their kqueue; Linux shares the parent's epoll and inotify instances
+  with it, so an unwatch, a remove or a destroy in the child takes the
+  registration from the parent.
 - Mutexes and conditions must not be destroyed while another thread uses them.
 - On `MAELYS_SYS_ERR_OS`, `errno` identifies the failed POSIX operation; the
   frequent conditions have their own codes and need no `errno`: `ERR_CLOSED`

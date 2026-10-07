@@ -9,6 +9,21 @@
 extern "C" {
 #endif
 
+/*
+ * Opaque pthread mutexes, conditions and joinable threads, with results in
+ * place of status codes.
+ *
+ * A mutex is the host's default kind: not recursive, not checked. A thread
+ * that locks a mutex it already holds waits for ever on both hosts, and
+ * nothing reports it; unlock belongs to the thread that locked. A mutex or
+ * a condition is destroyed once no thread holds it, uses it or waits on it;
+ * destroying NULL does nothing.
+ *
+ * A thread is joinable and nothing else: join it exactly once, from another
+ * thread. There is no detach, so a thread never joined keeps what it holds.
+ *
+ * Nothing here may be called from a signal handler.
+ */
 typedef struct maelys_sys_mutex maelys_sys_mutex_t;
 typedef struct maelys_sys_condition maelys_sys_condition_t;
 typedef struct maelys_sys_thread maelys_sys_thread_t;

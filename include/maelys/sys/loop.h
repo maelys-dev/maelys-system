@@ -107,8 +107,26 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_timer_cancel(
  * most one event per step. A wake that does not fit in the caller's array
  * stays pending for the next step.
  *
- * Registration, timers, step and destroy are owner-thread-only. wake and stop
- * are the only cross-thread operations. The loop never invokes callbacks.
+ * Registration, timers, step and destroy belong to the thread that created
+ * the loop: from another thread each is ERR_STATE and changes nothing. wake
+ * and stop are the only operations another thread may call, and destroy
+ * requires that no thread is still inside either. The loop never invokes
+ * callbacks.
+ *
+ * Never from a signal handler, wake and stop included: both go through the
+ * loop's wakeup, which takes a mutex on macOS (see wakeup.h). A process
+ * that stops on a signal has its handler write one byte to a non-blocking
+ * pipe the loop watches, and the loop's own thread decides.
+ *
+ * A loop does not cross fork(2). On macOS the child does not inherit the
+ * kqueue. On Linux the child shares the parent's epoll instance: an unwatch
+ * there removes the registration from the parent's loop, which stops
+ * reporting that descriptor and says nothing. A child that goes on to exec
+ * touches no loop; one that goes on running creates its own.
+ *
+ * An ERR_OS from step reports no event. Readiness is level-triggered and a
+ * due timer is spent only by the step that returns it, so what was ready is
+ * reported by a later step.
  * step accepts MAELYS_SYS_DEADLINE_INFINITE and then waits for an event, timer,
  * wake or stop without imposing its own deadline.
  *
