@@ -23,7 +23,7 @@
  * still compiles with only the public headers; the white-box test includes
  * fdpass_internal.h as well and checks that the declarations agree. */
 maelys_sys_result_t maelys_sys_unix_receive_bytes(
-    int socket_fd, void *buffer, size_t capacity, size_t *out_received);
+    int socket_fd, int stream, void *buffer, size_t capacity, size_t *out_received);
 
 #ifndef MSG_NOSIGNAL
 #error "MSG_NOSIGNAL is required"
@@ -291,23 +291,25 @@ maelys_sys_result_t maelys_sys_fd_receive(
 }
 
 maelys_sys_result_t maelys_sys_unix_receive_bytes(
-    int socket_fd, void *buffer, size_t capacity, size_t *out_received) {
+    int socket_fd, int stream, void *buffer, size_t capacity, size_t *out_received) {
     /* A control-only record is not EOF on macOS. Read again, but bound the
      * work so a peer continuously supplying such records cannot monopolise
-     * an event-loop thread. This is an error, not a false EOF/WouldBlock. */
+     * an event-loop thread. This is an error, not a false EOF/WouldBlock.
+     * A datagram socket has no end: one call takes one message, whatever
+     * it carries, zero bytes included, and what did not fit is gone. */
     for (unsigned attempt = 0; attempt < 16; ++attempt) {
         size_t fd_count = 0;
         unsigned flags = 0;
         int control = 0;
         maelys_sys_result_t result = receive_message(socket_fd, buffer, capacity,
-            out_received, NULL, 0, &fd_count, &flags, 1, 1, &control);
+            out_received, NULL, 0, &fd_count, &flags, stream, 1, &control);
         if (result != MAELYS_SYS_OK) return result;
         if (flags & MAELYS_SYS_FDPASS_CONTROL_TRUNCATED) {
             errno = EMSGSIZE;
             *out_received = 0;
             return MAELYS_SYS_ERR_OS;
         }
-        if (*out_received) return MAELYS_SYS_OK;
+        if (*out_received || !stream) return MAELYS_SYS_OK;
         if (!control) return MAELYS_SYS_ERR_CLOSED;
     }
     errno = EPROTO;

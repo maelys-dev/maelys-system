@@ -70,6 +70,12 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_connect_complete(
  * discarded per call before ERR_OS/EPROTO is returned, bounding work on a
  * hostile stream. Control truncation is ERR_OS/EMSGSIZE, never a successful
  * byte receive. On either error the consumed bytes are not recoverable.
+ *
+ * Only a stream has an end. On a datagram socket (SOCK_DGRAM) a receive
+ * takes exactly one message, whatever it carries: an empty datagram is OK
+ * with zero bytes, never ERR_CLOSED, and what did not fit in the buffer is
+ * gone with that message, as recv(2) has it. The handle reads the type
+ * once, when it is made.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_socket_receive(
     maelys_sys_socket_t *socket_handle,

@@ -154,6 +154,72 @@ static int connected_pair(int passcred) {
     return 0;
 }
 
+/* A datagram socket has no end: an empty datagram is a message, one with
+ * only descriptors is a message whose descriptors are closed, one longer
+ * than the buffer is cut to it and the next message is intact. */
+static int datagram_messages(void) {
+    const char *base = getenv("TMPDIR");
+    if (!base || base[0] != '/') base = "/tmp";
+    char paths[2][96];
+    struct sockaddr_un addresses[2];
+    maelys_sys_socket_t *handles[2] = {NULL, NULL};
+    int before = open_count();
+    for (int side = 0; side < 2; ++side) {
+        /* The socket path is bounded by sun_path: a long TMPDIR is cut. */
+        int written = snprintf(paths[side], sizeof(paths[side]), "%.50s/maelys-dg-%ld-%d.sock",
+            base, (long)getpid(), side);
+        CHECK(written > 0 && (size_t)written < sizeof(paths[side]));
+        CHECK((size_t)written < sizeof(addresses[side].sun_path));
+        (void)unlink(paths[side]);
+        memset(&addresses[side], 0, sizeof(addresses[side]));
+        addresses[side].sun_family = AF_UNIX;
+        memcpy(addresses[side].sun_path, paths[side], (size_t)written + 1u);
+        CHECK(maelys_sys_socket_create(AF_UNIX, SOCK_DGRAM, 0, &handles[side]) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_socket_bind(handles[side], (struct sockaddr *)&addresses[side],
+            (socklen_t)sizeof(addresses[side])) == MAELYS_SYS_OK);
+    }
+    for (int side = 0; side < 2; ++side) {
+        maelys_sys_connect_state_t state;
+        CHECK(maelys_sys_socket_connect_start(handles[side], (struct sockaddr *)&addresses[1 - side],
+            (socklen_t)sizeof(addresses[1 - side]), &state) == MAELYS_SYS_OK);
+    }
+    maelys_sys_socket_t *from = handles[0], *to = handles[1];
+    int sender = maelys_sys_socket_native_fd(from);
+    char buffer[8];
+    size_t count = 9;
+    /* Nothing queued: the normal state, not an end. */
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    /* An empty datagram is a message. */
+    CHECK(maelys_sys_socket_send(from, "", 0, &count) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_OK && count == 0);
+    /* A message of one byte and two descriptors: the byte, no descriptor. */
+    int source = open("/dev/null", O_RDONLY);
+    CHECK(source >= 0);
+    int opened = open_count();
+    CHECK(send_rights(sender, source, 2, 1) == 0);
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_OK && count == 1);
+    CHECK(open_count() == opened);
+    /* Descriptors and no byte: a message of zero bytes, descriptors closed. */
+    CHECK(send_rights(sender, source, 2, 0) == 0);
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_OK && count == 0);
+    CHECK(open_count() == opened);
+    CHECK(close(source) == 0);
+    /* Longer than the buffer: cut to it, and the next message is whole. */
+    CHECK(maelys_sys_socket_send(from, "ABCDEFGHIJ", 10, &count) == MAELYS_SYS_OK && count == 10);
+    CHECK(maelys_sys_socket_send(from, "next", 4, &count) == MAELYS_SYS_OK && count == 4);
+    CHECK(maelys_sys_socket_receive(to, buffer, 4, &count) == MAELYS_SYS_OK && count == 4);
+    CHECK(memcmp(buffer, "ABCD", 4) == 0);
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_OK && count == 4);
+    CHECK(memcmp(buffer, "next", 4) == 0);
+    CHECK(maelys_sys_socket_receive(to, buffer, sizeof(buffer), &count) == MAELYS_SYS_ERR_WOULD_BLOCK);
+    for (int side = 0; side < 2; ++side) {
+        CHECK(maelys_sys_socket_release(&handles[side]) == MAELYS_SYS_OK);
+        CHECK(unlink(paths[side]) == 0);
+    }
+    CHECK(open_count() == before);
+    return 0;
+}
+
 int main(void) {
     struct rlimit limit;
     CHECK(getrlimit(RLIMIT_NOFILE, &limit) == 0);
@@ -166,6 +232,8 @@ int main(void) {
     CHECK(connected_pair(1) == 0);
 #endif
     CHECK(open_count() == baseline);
+    if (datagram_messages() != 0) return 1;
     puts("socket rights: ok");
+    puts("ok - socket a Unix datagram socket has no end: empty, rights-only and cut messages");
     return 0;
 }
