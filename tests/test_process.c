@@ -320,7 +320,10 @@ static int test_isolated_layout(void) {
 }
 
 /* The table as a whole: an exchange of two numbers, and one source on two
- * targets. Each pipe carries a letter the child reads back. */
+ * targets. Each pipe carries a letter the child reads back. 0, 1 and 2 are
+ * all named: a sanitizer runtime opens /dev/null on a standard descriptor
+ * it finds closed, and the layouts above already prove what a target not
+ * named becomes. */
 static int test_table_as_a_whole(void) {
     int a[2], b[2], out[2];
     CHECK(maelys_sys_pipe_cloexec(a) == MAELYS_SYS_OK && maelys_sys_pipe_cloexec(b) == MAELYS_SYS_OK);
@@ -334,27 +337,27 @@ static int test_table_as_a_whole(void) {
     char s1_text[16], s2_text[16];
     snprintf(s1_text, sizeof(s1_text), "%d", s1);
     snprintf(s2_text, sizeof(s2_text), "%d", s2);
-    maelys_sys_process_fd_t exchange[4] = {{devnull, 0}, {out[1], 1}, {s1, s2}, {s2, s1}};
-    launch_t launch = {.mode = "fdlist", .arguments = {s1_text, s2_text}, .fds = exchange, .fd_count = 4};
+    maelys_sys_process_fd_t exchange[5] = {{devnull, 0}, {out[1], 1}, {devnull, 2}, {s1, s2}, {s2, s1}};
+    launch_t launch = {.mode = "fdlist", .arguments = {s1_text, s2_text}, .fds = exchange, .fd_count = 5};
     maelys_sys_process_t *process = NULL;
     CHECK(start(&launch, &process) == MAELYS_SYS_OK && process);
     char seen[512], expected[512];
     int out_reader = out[0];
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out_reader, seen, sizeof(seen)) == 0);
-    snprintf(expected, sizeof(expected), "fds: 0 1 %d(fifo) %d(fifo) fd0:eof fd%d:B fd%d:A",
+    snprintf(expected, sizeof(expected), "fds: 0 1 2 %d(fifo) %d(fifo) fd0:eof fd%d:B fd%d:A",
         s1 < s2 ? s1 : s2, s1 < s2 ? s2 : s1, s1, s2);
     CHECK_SEEN(seen, expected);
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out_reader) == MAELYS_SYS_OK);
     /* {a->6, a->7}: both read the pipe, one letter each. */
     CHECK(maelys_sys_pipe_cloexec(out) == MAELYS_SYS_OK);
-    maelys_sys_process_fd_t twice[4] = {{devnull, 0}, {out[1], 1}, {a[0], 6}, {a[0], 7}};
-    launch_t again = {.mode = "fdlist", .arguments = {"6", "7"}, .fds = twice, .fd_count = 4};
+    maelys_sys_process_fd_t twice[5] = {{devnull, 0}, {out[1], 1}, {devnull, 2}, {a[0], 6}, {a[0], 7}};
+    launch_t again = {.mode = "fdlist", .arguments = {"6", "7"}, .fds = twice, .fd_count = 5};
     CHECK(start(&again, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A");
+    CHECK_SEEN(seen, "fds: 0 1 2 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A");
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&a[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&a[1]) == MAELYS_SYS_OK);
