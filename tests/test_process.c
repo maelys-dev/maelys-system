@@ -153,11 +153,16 @@ static int child_fdlist(int argc, char **argv) {
     n += snprintf(line + n, sizeof(line) - (size_t)n, " fd0:%s",
         got == 0 ? "eof" : got > 0 ? "byte" : "closed");
     for (int index = 0; index < argc; ++index) {
+        /* One byte from a descriptor of the table, without waiting: a
+         * descriptor that is not the table's could have nothing to say. */
         int fd = atoi(argv[index]);
         byte = '.';
         if (fcntl(fd, F_GETFD) >= 0) {
+            int flags = fcntl(fd, F_GETFL);
+            if (flags >= 0) (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
             got = read(fd, &byte, 1);
             if (got == 0) byte = '-';
+            else if (got < 0) byte = '~';
         }
         n += snprintf(line + n, sizeof(line) - (size_t)n, " fd%d:%c", fd, byte);
     }
@@ -296,14 +301,16 @@ static int test_isolated_layout(void) {
     maelys_sys_process_fd_t table[5] = {
         {devnull, 0}, {out[1], 2}, {out[1], 1}, {pair[1], 3}, {profile, 4}
     };
-    launch_t launch = {.mode = "fdlist", .arguments = {"3", "4", "5"}, .fds = table, .fd_count = 5};
+    /* The listing alone says what is open; a probe of a number outside the
+     * table could land on a descriptor the program opened itself. */
+    launch_t launch = {.mode = "fdlist", .arguments = {"3", "4"}, .fds = table, .fd_count = 5};
     maelys_sys_process_t *process = NULL;
     CHECK(start(&launch, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(shutdown(pair[0], SHUT_WR) == 0);
     char seen[512];
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:- fd5:.");
+    CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:-");
     CHECK(finish(&process, 0) == 0);
     for (int index = 0; index < 40; ++index) CHECK(maelys_sys_fd_close(&stray[index]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK && maelys_sys_fd_close(&profile) == MAELYS_SYS_OK);
