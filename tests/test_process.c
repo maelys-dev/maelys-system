@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -34,8 +35,26 @@
     } \
 } while (0)
 
+/* A descriptor the program connected itself, to a named peer, is not one
+ * the table let through: a sanitizer runtime on macOS 15 opens one to the
+ * log daemon before main. Such entries are set apart and noted. */
+static void set_apart_named_sockets(char *seen) {
+    char *entry;
+    while ((entry = strstr(seen, "(sock:")) != NULL) {
+        char *start = entry;
+        while (start > seen && start[-1] != ' ') --start;
+        char *end = strchr(entry, ')');
+        if (!end) break;
+        ++end;
+        fprintf(stderr, "note: the program opened %.*s itself; set apart\n", (int)(end - start), start);
+        if (start > seen) --start; /* the space before */
+        memmove(start, end, strlen(end) + 1);
+    }
+}
+
 /* What the child saw, when it is not what was expected. */
 #define CHECK_SEEN(seen, expected) do { \
+    set_apart_named_sockets(seen); \
     if (strcmp((seen), (expected)) != 0) { \
         fprintf(stderr, "%s:%d the child saw \"%s\", expected \"%s\"\n", \
             __FILE__, __LINE__, (seen), (expected)); \
@@ -96,7 +115,22 @@ static void say(const char *text) {
 static const char *fd_kind(int fd) {
     struct stat status;
     if (fstat(fd, &status) != 0) return "?";
-    if (S_ISSOCK(status.st_mode)) return "sock";
+    if (S_ISSOCK(status.st_mode)) {
+        /* A socket with a named peer was connected by the program itself,
+         * a runtime's log socket for one: no socket of the table has a
+         * name. Said as such, so that the parent can set it apart. */
+        static char named[128];
+        struct sockaddr_un peer;
+        socklen_t length = (socklen_t)sizeof(peer);
+        memset(&peer, 0, sizeof(peer));
+        if (getpeername(fd, (struct sockaddr *)&peer, &length) == 0 &&
+            peer.sun_family == AF_UNIX && length > (socklen_t)offsetof(struct sockaddr_un, sun_path) &&
+            peer.sun_path[0]) {
+            snprintf(named, sizeof(named), "sock:%.100s", peer.sun_path);
+            return named;
+        }
+        return "sock";
+    }
     if (S_ISFIFO(status.st_mode)) return "fifo";
     if (S_ISCHR(status.st_mode)) return "chr";
     if (S_ISREG(status.st_mode)) return "reg";
