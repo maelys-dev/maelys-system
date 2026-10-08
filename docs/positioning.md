@@ -21,7 +21,10 @@ The following do not belong in the 0.x product:
 - recursive filesystem watching, file names in events, or the content and
   metadata of files: 0.12 watches the entries of one directory, "reread
   it", and nothing finer;
-- process spawning, child supervision or sandbox policy;
+- a search of PATH, shebangs, a judgement on whether a file may be run,
+  a terminal, process trees, or confinement: 0.13 starts one program with
+  exactly the descriptors named, follows it, stops it within a bound, and
+  tells whether a number still names a process, and nothing more;
 - Windows, IOCP or WFP support;
 - JSON, MCP, receipts or other domain types; and
 - performance claims based on a single machine or a microbenchmark.
@@ -33,6 +36,7 @@ accepting a protocol stack.
 ## Current evidence
 
 Maelys Egress is a real link-time consumer of clocks, descriptors, SIGPIPE-safe
-writes and the reactor. The repository also carries generic relay, timer and
-cross-thread examples. Examples demonstrate contracts; they are not claims that
-another Maelys product has completed its migration.
+writes and the reactor. The repository also carries generic relay, timer,
+cross-thread, directory-watch and process-launch examples. Examples
+demonstrate contracts; they are not claims that another Maelys product has
+completed its migration.

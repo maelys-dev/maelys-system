@@ -38,7 +38,8 @@ ifeq ($(UNAME_S),Darwin)
 PLATFORM_SOURCE := src/loop_kqueue.c
 endif
 SOURCES := src/result.c src/clock.c src/fd.c src/fdpass.c src/file.c src/socket.c \
-	src/wakeup.c src/thread.c src/loop.c src/loop_poll.c src/dirwatch.c $(PLATFORM_SOURCE)
+	src/wakeup.c src/thread.c src/loop.c src/loop_poll.c src/dirwatch.c src/process.c \
+	$(PLATFORM_SOURCE)
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES))
 LIB := $(BUILD)/lib/libmaelys_sys.a
 TEST := $(BUILD)/tests/test_sys
@@ -56,12 +57,14 @@ FDPASS_FAULT_TEST := $(BUILD)/tests/test_fdpass_faults
 SOCKET_RIGHTS_TEST := $(BUILD)/tests/test_socket_rights
 DIRWATCH_TEST := $(BUILD)/tests/test_dirwatch
 DIRWATCH_FAULT_TEST := $(BUILD)/tests/test_dirwatch_faults
+PROCESS_TEST := $(BUILD)/tests/test_process
+PROCESS_FAULT_TEST := $(BUILD)/tests/test_process_faults
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST) \
-	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST)
+	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
-EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch
+EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch process-launch
 EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 
@@ -133,6 +136,8 @@ test: $(TESTS)
 	$(SOCKET_RIGHTS_TEST)
 	$(DIRWATCH_TEST)
 	$(DIRWATCH_FAULT_TEST)
+	$(PROCESS_TEST)
+	$(PROCESS_FAULT_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

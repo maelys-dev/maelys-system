@@ -10,6 +10,10 @@ All examples use the public installed surface and are compiled by `make check`.
   rereads one each time its entries change. It shows the three rules of
   `dirwatch.h`: add before the first read, one poll per readiness with an
   array of `entry_capacity` elements, and "reread" as the whole message.
+- `process-launch GRACE_MS PATH [ARG...]` starts a program with exactly
+  three descriptors, /dev/null and one pipe for both outputs, relays its
+  output from a loop in which its end is an event like any other, and
+  stops it with the ladder, SIGTERM then SIGKILL, when a timer fires.
 - `tcp-relay LISTEN_PORT UPSTREAM_IP UPSTREAM_PORT` is a single-connection,
   loopback-only, bidirectional TCP relay. It uses bounded ring buffers,
   readiness-controlled backpressure and half-close propagation. The upstream

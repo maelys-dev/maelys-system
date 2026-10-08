@@ -33,14 +33,16 @@ path.write_text(source.replace(old, new, 1))
 PY
     # The build runs without a time limit, so a slow host cannot pass a
     # mutant off as killed; only the tests are bounded, and a hang is a
-    # kill of its own kind, said as such.
+    # kill of its own kind, said as such. The bound is three times what the
+    # suite takes on the slowest host measured (39 s on macOS at 0.13.0),
+    # so that a loaded host does not pass a survivor off as a hang.
     if ! make -C "$mutant" BUILD=build/mutant all tests >/dev/null 2>&1; then
         printf '%s\n' "mutation killed by the compiler: $name"
         killed=$((killed + 1))
         return 0
     fi
     status=0
-    python3 "$root/scripts/run-with-timeout.py" 60 \
+    python3 "$root/scripts/run-with-timeout.py" 120 \
         make -C "$mutant" BUILD=build/mutant test >/dev/null 2>&1 || status=$?
     if test "$status" -eq 0; then
         printf '%s\n' "mutation survived: $name" >&2
@@ -250,5 +252,43 @@ run_mutant_darwin dirwatch-same-directory-twice src/dirwatch.c \
     'entry->device == status.st_dev && entry->inode == status.st_ino' '0'
 run_mutant_darwin dirwatch-link-followed src/dirwatch.c \
     'O_EVTONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC' 'O_EVTONLY | O_DIRECTORY | O_CLOEXEC'
+
+# Processes (0.13): the table staged, everything else closed, a failed exec
+# heard, the number reserved, the ladder, a running program not hidden, an
+# identity that is more than a number.
+run_mutant process-signal-after-reap src/process.c \
+    'if (is_reaped(process)) return MAELYS_SYS_ERR_STATE;
+    if (kill(' 'if (0) return MAELYS_SYS_ERR_STATE;
+    if (kill('
+run_mutant process-ladder-stops-at-term src/process.c \
+    'for (int rung = 0; rung < 2; ++rung) {' 'for (int rung = 0; rung < 1; ++rung) {'
+run_mutant process-release-hides-a-running-program src/process.c \
+    'else if (!reaped) result = MAELYS_SYS_ERR_STATE;' 'else if (0) result = MAELYS_SYS_ERR_STATE;'
+run_mutant process-identity-is-only-a-number src/process.c \
+    '*out_alive = now.birth == identity->birth && now.boot == identity->boot;' \
+    '*out_alive = now.boot == identity->boot;'
+run_mutant process-exit-fd-open-without-recheck src/process.c \
+    '    result = maelys_sys_process_alive(identity, &alive);
+    if (result != MAELYS_SYS_OK || !alive) {' \
+    '    result = MAELYS_SYS_OK;
+    if (result != MAELYS_SYS_OK || !alive) {'
+run_mutant_linux process-table-not-staged src/process.c \
+    'staged[index] = fcntl(table->source[index], F_DUPFD_CLOEXEC, table->base);' \
+    'staged[index] = table->source[index];'
+run_mutant_linux process-everything-kept src/process.c \
+    'if (!error && mark_all_cloexec(limit) != 0) error = errno;' \
+    'if (!error && limit == 0 && mark_all_cloexec(limit) != 0) error = errno;'
+run_mutant_linux process-failed-exec-unheard src/process.c \
+    '    if (report >= 0) {
+        ssize_t written;' '    if (0) {
+        ssize_t written;'
+run_mutant_darwin process-table-not-staged src/process.c \
+    'error = posix_spawn_file_actions_adddup2(&actions, staged[index], table->target[index]);' \
+    'error = posix_spawn_file_actions_adddup2(&actions, table->source[index], table->target[index]);'
+run_mutant_darwin process-everything-kept src/process.c \
+    'short flags = POSIX_SPAWN_CLOEXEC_DEFAULT;' 'short flags = 0;'
+run_mutant_darwin process-ended-before-registration-unreadable src/process.c \
+    'EV_SET(&change, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);' \
+    'EV_SET(&change, 1, EVFILT_USER, 0, 0, 0, NULL);'
 
 printf '%s\n' "mutation check: $killed/$killed killed"
