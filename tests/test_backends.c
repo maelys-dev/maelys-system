@@ -206,6 +206,23 @@ static int forked_child_unwatches(maelys_sys_loop_backend_t backend) {
     return 0;
 }
 
+/* Waits up to ten seconds for a descriptor the test made ready itself: a
+ * connection over the loopback takes an instant, and a loaded runner has
+ * taken more than one second to deliver it. Says what it got when not. */
+static int ready_within(int fd, unsigned interest) {
+    unsigned flags = 0;
+    uint64_t deadline = 0;
+    CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
+    maelys_sys_result_t result = maelys_sys_fd_wait(fd, interest, deadline, &flags);
+    if (result != MAELYS_SYS_OK) {
+        fprintf(stderr, "%s:%d descriptor %d not ready for %u: %s (errno %d: %s)\n",
+            __FILE__, __LINE__, fd, interest, maelys_sys_result_string(result),
+            errno, strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
 static int peer_half_close(maelys_sys_loop_backend_t backend) {
     fixture_t fixture;
     CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 1) == 0);
@@ -243,19 +260,14 @@ static int receive_would_block(maelys_sys_loop_backend_t backend) {
     maelys_sys_socket_t *client = NULL;
     maelys_sys_socket_t *accepted = NULL;
     maelys_sys_connect_state_t state;
-    unsigned flags = 0;
-    uint64_t deadline = 0;
     CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) ==
         MAELYS_SYS_OK);
     CHECK(maelys_sys_socket_connect_start(client, (const struct sockaddr *)&address,
         length, &state) == MAELYS_SYS_OK);
-    CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
-    CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(listener),
-        MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+    CHECK(ready_within(maelys_sys_socket_native_fd(listener), MAELYS_SYS_INTEREST_READ) == 0);
     CHECK(maelys_sys_socket_accept(listener, NULL, NULL, &accepted) == MAELYS_SYS_OK);
     if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
-        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(client),
-            MAELYS_SYS_INTEREST_WRITE, deadline, &flags) == MAELYS_SYS_OK);
+        CHECK(ready_within(maelys_sys_socket_native_fd(client), MAELYS_SYS_INTEREST_WRITE) == 0);
     }
     CHECK(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_OK);
     char byte = 0;
@@ -290,19 +302,14 @@ static int reset_on_send(maelys_sys_loop_backend_t backend) {
         maelys_sys_socket_t *client = NULL;
         maelys_sys_socket_t *accepted = NULL;
         maelys_sys_connect_state_t state;
-        unsigned flags = 0;
-        uint64_t deadline = 0;
         CHECK(maelys_sys_socket_create(AF_INET, SOCK_STREAM, IPPROTO_TCP, &client) ==
             MAELYS_SYS_OK);
         CHECK(maelys_sys_socket_connect_start(client, (const struct sockaddr *)&address,
             length, &state) == MAELYS_SYS_OK);
-        CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
-        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(listener),
-            MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+        CHECK(ready_within(maelys_sys_socket_native_fd(listener), MAELYS_SYS_INTEREST_READ) == 0);
         CHECK(maelys_sys_socket_accept(listener, NULL, NULL, &accepted) == MAELYS_SYS_OK);
         if (state == MAELYS_SYS_CONNECT_IN_PROGRESS) {
-            CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(client),
-                MAELYS_SYS_INTEREST_WRITE, deadline, &flags) == MAELYS_SYS_OK);
+            CHECK(ready_within(maelys_sys_socket_native_fd(client), MAELYS_SYS_INTEREST_WRITE) == 0);
         }
         CHECK(maelys_sys_socket_connect_complete(client) == MAELYS_SYS_OK);
         /* The client resets: a close with linger 0 sends RST, not FIN. */
@@ -310,8 +317,9 @@ static int reset_on_send(maelys_sys_loop_backend_t backend) {
         CHECK(setsockopt(maelys_sys_socket_native_fd(client), SOL_SOCKET, SO_LINGER,
             &abort, (socklen_t)sizeof(abort)) == 0);
         CHECK(maelys_sys_socket_release(&client) == MAELYS_SYS_OK);
-        CHECK(maelys_sys_fd_wait(maelys_sys_socket_native_fd(accepted),
-            MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
+        CHECK(ready_within(maelys_sys_socket_native_fd(accepted), MAELYS_SYS_INTEREST_READ) == 0);
+        uint64_t deadline = 0;
+        CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
         int fd = maelys_sys_socket_native_fd(accepted);
         char byte = 0;
         size_t written = 0;
