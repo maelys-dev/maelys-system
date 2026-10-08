@@ -234,18 +234,26 @@ static maelys_sys_result_t start(const launch_t *launch, maelys_sys_process_t **
     return maelys_sys_process_spawn(&options, out);
 }
 
-/* Reads fd until end of stream, within 10 s: a sanitized program on a
+/* Waits for the program to end, within 10 s: a sanitized program on a
  * loaded host takes seconds to start. */
-static int read_all(int fd, char *buffer, size_t capacity) {
-    size_t length = 0;
+static int ended(maelys_sys_process_t *process, int expected_code) {
+    maelys_sys_process_status_t status;
     uint64_t deadline = 0;
     CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
+    CHECK(status.exited && status.exit_code == expected_code && !status.signaled);
+    return 0;
+}
+
+/* What the program wrote, once it has ended: everything is in the buffer
+ * of the pipe or socket by then, so this reads and never waits. */
+static int read_all(int fd, char *buffer, size_t capacity) {
+    size_t length = 0;
     CHECK(maelys_sys_fd_set_nonblocking(fd) == MAELYS_SYS_OK);
     for (;;) {
-        unsigned flags = 0;
-        CHECK(maelys_sys_fd_wait(fd, MAELYS_SYS_INTEREST_READ, deadline, &flags) == MAELYS_SYS_OK);
         ssize_t got = read(fd, buffer + length, capacity - 1 - length);
-        if (got < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0 && errno == EAGAIN) break;
         CHECK(got >= 0);
         if (got == 0) break;
         length += (size_t)got;
@@ -255,12 +263,9 @@ static int read_all(int fd, char *buffer, size_t capacity) {
     return 0;
 }
 
+/* The program has ended and is reaped; what it wrote is read after. */
 static int finish(maelys_sys_process_t **process, int expected_code) {
-    maelys_sys_process_status_t status;
-    uint64_t deadline = 0;
-    CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
-    CHECK(maelys_sys_process_wait(*process, deadline, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == expected_code && !status.signaled);
+    CHECK(ended(*process, expected_code) == 0);
     CHECK(maelys_sys_process_release(process) == MAELYS_SYS_OK && *process == NULL);
     return 0;
 }
@@ -276,9 +281,9 @@ static int test_stdio_layout(void) {
     CHECK(start(&launch, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&pair[1]) == MAELYS_SYS_OK);
     char seen[512];
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(pair[0], seen, sizeof(seen)) == 0);
     CHECK_SEEN(seen, "fds: 0 1 2 fd0:eof");
-    CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&pair[0]) == MAELYS_SYS_OK);
     return 0;
 }
@@ -309,9 +314,9 @@ static int test_isolated_layout(void) {
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(shutdown(pair[0], SHUT_WR) == 0);
     char seen[512];
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
     CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:-");
-    CHECK(finish(&process, 0) == 0);
     for (int index = 0; index < 40; ++index) CHECK(maelys_sys_fd_close(&stray[index]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK && maelys_sys_fd_close(&profile) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
@@ -344,11 +349,11 @@ static int test_table_as_a_whole(void) {
     char seen[512], expected[512];
     int out_reader = out[0];
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out_reader, seen, sizeof(seen)) == 0);
     snprintf(expected, sizeof(expected), "fds: 0 1 2 %d(fifo) %d(fifo) fd0:eof fd%d:B fd%d:A",
         s1 < s2 ? s1 : s2, s1 < s2 ? s2 : s1, s1, s2);
     CHECK_SEEN(seen, expected);
-    CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out_reader) == MAELYS_SYS_OK);
     /* {a->6, a->7}: both read the pipe, one letter each. */
     CHECK(maelys_sys_pipe_cloexec(out) == MAELYS_SYS_OK);
@@ -356,9 +361,9 @@ static int test_table_as_a_whole(void) {
     launch_t again = {.mode = "fdlist", .arguments = {"6", "7"}, .fds = twice, .fd_count = 5};
     CHECK(start(&again, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
     CHECK_SEEN(seen, "fds: 0 1 2 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A");
-    CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&a[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&a[1]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&b[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&b[1]) == MAELYS_SYS_OK);
@@ -456,9 +461,9 @@ static int test_environment(void) {
     launch_t explicit = {.mode = "env", .envp = envp, .fds = table, .fd_count = 1};
     CHECK(start(&explicit, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
     CHECK_SEEN(seen, "env:2 var:yes");
-    CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     /* NULL: the parent's own, counted here. */
     extern char **environ;
@@ -472,9 +477,9 @@ static int test_environment(void) {
     launch_t inherited = {.mode = "env", .fds = table, .fd_count = 1};
     CHECK(start(&inherited, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
+    CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
     CHECK_SEEN(seen, expected);
-    CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     return 0;
 }
@@ -487,8 +492,8 @@ static int where(const char *cwd, unsigned flags, char *seen, size_t capacity) {
     launch_t launch = {.mode = "where", .cwd = cwd, .fds = table, .fd_count = 1, .flags = flags};
     CHECK(start(&launch, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
-    CHECK(read_all(out[0], seen, capacity) == 0);
     CHECK(finish(&process, 0) == 0);
+    CHECK(read_all(out[0], seen, capacity) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     return 0;
 }
