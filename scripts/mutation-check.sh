@@ -175,6 +175,9 @@ run_mutant_linux thread-name-not-truncated src/thread.c \
     '#define THREAD_NAME_LIMIT 15u' '#define THREAD_NAME_LIMIT 63u'
 run_mutant_darwin unix-byte-receive-ignores-rights src/socket.c \
     'if (socket_handle->domain == AF_UNIX) {' 'if (0) {'
+run_mutant unix-datagram-empty-is-eof src/socket.c \
+    'socket_handle->type == SOCK_STREAM, buffer, capacity, out_received);' \
+    '1, buffer, capacity, out_received);'
 run_mutant_darwin unix-control-only-is-eof src/fdpass.c \
     'if (!control) return MAELYS_SYS_ERR_CLOSED;' \
     'if (1) return MAELYS_SYS_ERR_CLOSED;'

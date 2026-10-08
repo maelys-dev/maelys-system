@@ -16,6 +16,7 @@
 struct maelys_sys_socket {
     int fd;
     int domain;
+    int type; /* SO_TYPE, read once: a stream has an end, a datagram socket has messages */
     int connect_started;
     int connect_complete;
     int connect_error;
@@ -71,6 +72,13 @@ static maelys_sys_result_t wrap_socket(
     if (!socket_handle) return MAELYS_SYS_ERR_MEMORY;
     socket_handle->fd = fd;
     socket_handle->domain = domain;
+    socklen_t type_length = (socklen_t)sizeof(socket_handle->type);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_handle->type, &type_length) != 0) {
+        int saved = errno;
+        free(socket_handle);
+        errno = saved;
+        return MAELYS_SYS_ERR_OS;
+    }
     *out_socket = socket_handle;
     return MAELYS_SYS_OK;
 }
@@ -196,7 +204,11 @@ maelys_sys_result_t maelys_sys_socket_receive(
         return MAELYS_SYS_ERR_ARGUMENT;
     }
     if (socket_handle->domain == AF_UNIX) {
-        return maelys_sys_unix_receive_bytes(socket_handle->fd, buffer, capacity, out_received);
+        /* Through the control-aware path either way, so that a descriptor a
+         * peer attaches is closed and never installed. Only a stream has an
+         * end: on a datagram socket, zero bytes is a message. */
+        return maelys_sys_unix_receive_bytes(socket_handle->fd,
+            socket_handle->type == SOCK_STREAM, buffer, capacity, out_received);
     }
     do {
         received = recv(socket_handle->fd, buffer, capacity, 0);
