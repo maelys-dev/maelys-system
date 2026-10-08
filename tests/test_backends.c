@@ -60,6 +60,118 @@ static int step_within(
 }
 
 /* Peer shutdown(SHUT_WR): READ|HUP, exactly, on every backend. */
+static int timer_due_now(maelys_sys_loop_t *loop, maelys_sys_token_t token) {
+    uint64_t now = 0;
+    maelys_sys_timer_t timer = 0;
+    CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_timer_add(loop, now, token, &timer) == MAELYS_SYS_OK);
+    return 0;
+}
+
+/*
+ * A timer that is due again at every step, as a periodic timer is for a
+ * consumer slower than its period, does not keep a readable descriptor
+ * unheard: each step reports both.
+ */
+static int timer_always_due_and_descriptor(maelys_sys_loop_backend_t backend) {
+    fixture_t fixture;
+    CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 1) == 0);
+    CHECK(write(fixture.sockets[1], "x", 1) == 1);
+    CHECK(timer_due_now(fixture.loop, 2) == 0);
+    for (int turn = 0; turn < 8; ++turn) {
+        maelys_sys_event_t events[4];
+        size_t count = 0;
+        maelys_sys_step_result_t step = MAELYS_SYS_STEP_STOPPED;
+        CHECK(step_within(fixture.loop, 500, events, 4, &count, &step) == 0);
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 2);
+        int descriptor = 0, timer = 0;
+        for (size_t index = 0; index < count; ++index) {
+            if (events[index].token == 1 && events[index].flags == MAELYS_SYS_EVENT_READ) {
+                ++descriptor;
+            }
+            if (events[index].token == 2 && events[index].flags == MAELYS_SYS_EVENT_TIMER) {
+                ++timer;
+            }
+        }
+        CHECK(descriptor == 1 && timer == 1);
+        CHECK(timer_due_now(fixture.loop, 2) == 0);
+    }
+    CHECK(fixture_close(&fixture) == 0);
+    return 0;
+}
+
+/*
+ * An array of one, which a timer always due and a descriptor always
+ * readable could each fill for ever: they go first in turn, so neither
+ * waits more than one step for the other.
+ */
+static int timer_and_descriptor_take_turns(maelys_sys_loop_backend_t backend) {
+    fixture_t fixture;
+    CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 1) == 0);
+    CHECK(write(fixture.sockets[1], "x", 1) == 1);
+    CHECK(timer_due_now(fixture.loop, 2) == 0);
+    int descriptors = 0, timers = 0;
+    for (int turn = 0; turn < 8; ++turn) {
+        maelys_sys_event_t event;
+        size_t count = 0;
+        maelys_sys_step_result_t step = MAELYS_SYS_STEP_STOPPED;
+        CHECK(step_within(fixture.loop, 500, &event, 1, &count, &step) == 0);
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 1);
+        if (event.flags == MAELYS_SYS_EVENT_TIMER) {
+            CHECK(event.token == 2);
+            ++timers;
+            CHECK(timer_due_now(fixture.loop, 2) == 0);
+        } else {
+            CHECK(event.token == 1 && event.flags == MAELYS_SYS_EVENT_READ);
+            ++descriptors;
+        }
+    }
+    CHECK(descriptors == 4 && timers == 4);
+    CHECK(fixture_close(&fixture) == 0);
+    return 0;
+}
+
+/*
+ * More timers due than the array holds, beside a readable descriptor:
+ * every timer fires exactly once, none is spent by a step that does not
+ * return it, and the descriptor is heard on the steps where it goes first.
+ */
+static int more_timers_due_than_room(maelys_sys_loop_backend_t backend) {
+    enum { TIMERS = 9 };
+    fixture_t fixture;
+    CHECK(fixture_open(&fixture, backend, MAELYS_SYS_INTEREST_READ, 1) == 0);
+    CHECK(write(fixture.sockets[1], "x", 1) == 1);
+    for (unsigned index = 0; index < TIMERS; ++index) {
+        CHECK(timer_due_now(fixture.loop, 100u + index) == 0);
+    }
+    static const size_t expected_count[4] = {4, 4, 3, 1};
+    static const int expected_descriptor[4] = {1, 0, 1, 1};
+    unsigned fired = 0;
+    for (int turn = 0; turn < 4; ++turn) {
+        maelys_sys_event_t events[4];
+        size_t count = 0;
+        maelys_sys_step_result_t step = MAELYS_SYS_STEP_STOPPED;
+        CHECK(step_within(fixture.loop, 500, events, 4, &count, &step) == 0);
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == expected_count[turn]);
+        int descriptor = 0;
+        for (size_t index = 0; index < count; ++index) {
+            if (events[index].flags == MAELYS_SYS_EVENT_TIMER) {
+                maelys_sys_token_t token = events[index].token;
+                CHECK(token >= 100u && token < 100u + TIMERS);
+                CHECK(!(fired & (1u << (token - 100u))));
+                fired |= 1u << (token - 100u);
+            } else {
+                CHECK(events[index].token == 1);
+                ++descriptor;
+            }
+        }
+        CHECK(descriptor == expected_descriptor[turn]);
+    }
+    CHECK(fired == (1u << TIMERS) - 1u);
+    CHECK(fixture_close(&fixture) == 0);
+    return 0;
+}
+
 /*
  * A loop does not cross fork, and the hosts differ in how it fails: the
  * child shares the parent's epoll instance on Linux, so its unwatch takes
@@ -444,6 +556,9 @@ static int run_backend(maelys_sys_loop_backend_t backend, const char *label) {
     CHECK(receive_would_block(backend) == 0);
     CHECK(reset_on_send(backend) == 0);
     CHECK(forked_child_unwatches(backend) == 0);
+    CHECK(timer_always_due_and_descriptor(backend) == 0);
+    CHECK(timer_and_descriptor_take_turns(backend) == 0);
+    CHECK(more_timers_due_than_room(backend) == 0);
     printf("ok - %s backend parity\n", label);
     return 0;
 }

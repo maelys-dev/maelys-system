@@ -2,11 +2,35 @@
 
 ## 0.12.3 - 2026-10-07
 
-Every public header read against three questions: which thread may call,
-whether a signal handler may, and what is already done when an error comes
-back. No function, structure or result code changes, and no behaviour; what
-changes is what the headers say, and two differences between the hosts that
-were measured on the way and are now tested.
+One correction to the loop, then every public header read against three
+questions: which thread may call, whether a signal handler may, and what is
+already done when an error comes back. No function, structure or result
+code changes.
+
+- `maelys_sys_loop_step` no longer lets a due timer keep descriptors
+  unheard. A step that found a timer due returned it without asking the
+  kernel anything, so a timer due again at every step starved every watch.
+  Measured on both hosts over 200 steps, with one readable pipe watched: a
+  timer re-armed "due at once" was served 200 times and the pipe reported
+  never; a 1 ms periodic timer under a consumer that takes 3 ms per turn,
+  199 times against once. Every tag of this repository, from 0.5.4, carries
+  it. A step now always asks the kernel, without waiting when a timer is due, and spends no timer
+  before the kernel has answered. When timers and descriptors could each
+  fill the array, they go first in turn. In both measurements the pipe is
+  now reported at all 200 steps.
+  What a caller may notice: within one array, timers no longer come before
+  descriptors, which the contract never promised and now says; and a step
+  with a due timer costs one system call it did not make.
+- The whole turn is tested, not one call: a loop that watches a directory
+  watch, a pipe that stays readable and a timer due again at every turn,
+  while 128 directories change before each read of the kernel. Each of
+  twelve turns serves all three.
+- `examples/directory-watch.c` shows the three rules of `dirwatch.h` in a
+  loop: add before the first read, one poll per readiness with an array of
+  `entry_capacity` elements, "reread" as the whole message.
+- Mutation gate at sixty-eight: four faults on the fairness of a step.
+
+The headers:
 
 - `loop.h`: `wake` and `stop` are never called from a signal handler. They
   go through the loop's wakeup, which takes a mutex on macOS, exactly as

@@ -8,6 +8,8 @@
 #define MAELYS_SYS_DIRWATCH_TESTING 1
 #include "src/dirwatch.c"
 
+#include "maelys/sys/fd.h"
+
 #include <stdio.h>
 
 #define CHECK(condition) do { \
@@ -203,6 +205,89 @@ static int test_poll_does_not_follow_a_writer(void) {
     return 0;
 }
 
+/*
+ * The whole turn, not one call: a loop that watches the handle, a pipe
+ * that stays readable and a timer due again at every turn, while every
+ * watched directory changes before each read of the kernel. Every turn
+ * serves all three, and the handle costs it a counted number of reads.
+ */
+static int test_loop_stays_live_under_a_writer(void) {
+    enum { TURNS = 12, WATCHED = 1, TIMER = 2, PIPE = 3 };
+    maelys_sys_dirwatch_t *dirwatch = NULL;
+    maelys_sys_dirwatch_entry_t entry = 0;
+    maelys_sys_loop_t *loop = NULL;
+    maelys_sys_watch_t handle_watch = 0, pipe_watch = 0;
+    maelys_sys_timer_t timer = 0;
+    static maelys_sys_dirwatch_change_t changes[HOT];
+    int pipe_fds[2] = {-1, -1};
+    uint64_t now = 0;
+    CHECK(maelys_sys_dirwatch_create(HOT, &dirwatch) == MAELYS_SYS_OK);
+    for (size_t index = 0; index < HOT; ++index) {
+        char name[32];
+        CHECK(snprintf(name, sizeof(name), "live-%zu", index) > 0);
+        CHECK(in(root, name, hot[index]) && mkdir(hot[index], 0700) == 0);
+        CHECK(maelys_sys_dirwatch_add(dirwatch, hot[index], index, &entry) == MAELYS_SYS_OK);
+        hot_member[index] = 0;
+    }
+    CHECK(maelys_sys_loop_create(MAELYS_SYS_LOOP_AUTO, &loop) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_watch_fd(loop, maelys_sys_dirwatch_fd(dirwatch),
+        MAELYS_SYS_INTEREST_READ, WATCHED, &handle_watch) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_pipe_cloexec(pipe_fds) == MAELYS_SYS_OK);
+    CHECK(write(pipe_fds[1], "x", 1) == 1);
+    CHECK(maelys_sys_loop_watch_fd(loop, pipe_fds[0], MAELYS_SYS_INTEREST_READ, PIPE,
+        &pipe_watch) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_timer_add(loop, now, TIMER, &timer) == MAELYS_SYS_OK);
+
+    feed_failed = 0;
+    change_every_hot_directory();
+    reads_seen = 0;
+    feeds_left = TURNS * (HOT / 64 + 1);
+    int handle_turns = 0, timer_turns = 0, pipe_turns = 0;
+    for (int turn = 0; turn < TURNS; ++turn) {
+        maelys_sys_event_t events[4];
+        size_t count = 0, changed = 0;
+        maelys_sys_step_result_t step = MAELYS_SYS_STEP_STOPPED;
+        uint64_t deadline = 0;
+        CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
+        CHECK(maelys_sys_loop_step(loop, deadline, events, 4, &count, &step) == MAELYS_SYS_OK);
+        CHECK(step == MAELYS_SYS_STEP_PROGRESS && count == 3);
+        for (size_t index = 0; index < count; ++index) {
+            if (events[index].token == WATCHED) {
+                /* One poll, an array of the capacity, back to the loop. */
+                CHECK(maelys_sys_dirwatch_poll(dirwatch, changes, HOT, &changed) ==
+                    MAELYS_SYS_OK && changed == HOT);
+                ++handle_turns;
+            } else if (events[index].token == TIMER) {
+                CHECK(events[index].flags == MAELYS_SYS_EVENT_TIMER);
+                CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
+                CHECK(maelys_sys_loop_timer_add(loop, now, TIMER, &timer) == MAELYS_SYS_OK);
+                ++timer_turns;
+            } else {
+                CHECK(events[index].token == PIPE);
+                ++pipe_turns;
+            }
+        }
+    }
+    CHECK(handle_turns == TURNS && timer_turns == TURNS && pipe_turns == TURNS);
+    CHECK(reads_seen <= TURNS * (HOT / 64 + 1) && !feed_failed);
+
+    feeds_left = 0;
+    CHECK(maelys_sys_loop_unwatch(loop, handle_watch) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_unwatch(loop, pipe_watch) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_fd_close(&pipe_fds[0]) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_fd_close(&pipe_fds[1]) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK);
+    for (size_t index = 0; index < HOT; ++index) {
+        char member[PATH_ROOM];
+        CHECK(in(hot[index], "m", member));
+        if (hot_member[index]) CHECK(unlink(member) == 0);
+        CHECK(rmdir(hot[index]) == 0);
+    }
+    return 0;
+}
+
 /* The kernel refusing the handle, the registration or the read: each is
  * reported with its errno and leaves nothing open nor half-made. */
 static int test_kernel_refusals(void) {
@@ -260,7 +345,7 @@ int main(void) {
     int written = snprintf(root, sizeof(root), "%s/maelys-sys-dirwatch-faults.XXXXXX", base);
     if (written <= 0 || (size_t)written >= sizeof(root) || !mkdtemp(root)) return 1;
     if (test_overflow() || test_poll_does_not_follow_a_writer() ||
-        test_kernel_refusals()) return 1;
+        test_loop_stays_live_under_a_writer() || test_kernel_refusals()) return 1;
     if (rmdir(root) != 0) {
         fprintf(stderr, "work directory not empty: %s\n", root);
         return 1;
@@ -268,6 +353,7 @@ int main(void) {
     puts("ok - dirwatch overflow marks every live entry once");
     puts("ok - dirwatch poll takes what was queued and does not follow a writer");
     puts("ok - dirwatch an array of the capacity leaves nothing owed; a smaller one can stay full");
+    puts("ok - dirwatch in a loop under a writer: handle, pipe and timer served at every turn");
     puts("ok - dirwatch kernel refusals reported, nothing left open");
     return 0;
 }

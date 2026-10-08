@@ -83,6 +83,17 @@ run_mutant dead-timer-not-counted src/loop.c \
     '++loop->timer_heap_dead;' '(void)loop->timer_heap_dead;'
 run_mutant dead-count-kept-after-compaction src/loop.c \
     'loop->timer_heap_dead = 0;' '(void)loop->timer_heap_dead;'
+run_mutant due-timer-skips-the-descriptors src/loop.c \
+    'if (room) {' 'if (room && !due) {'
+run_mutant timers-keep-no-place src/loop.c \
+    'if (due && timers_first) room -= due < room ? due : room;' \
+    'if (0) room -= due < room ? due : room;'
+run_mutant timers-always-first src/loop.c \
+    'if (due) loop->timers_first = !timers_first;' \
+    'if (due) loop->timers_first = 1;'
+run_mutant descriptors-always-first src/loop.c \
+    'if (due) loop->timers_first = !timers_first;' \
+    'if (due) loop->timers_first = 0;'
 
 # File primitives: the faults a cold review injected and the tests now catch.
 run_mutant lock-path-not-rechecked src/file.c \

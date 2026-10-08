@@ -54,6 +54,7 @@ struct maelys_sys_loop {
     size_t timer_heap_count;
     size_t timer_heap_capacity;
     size_t timer_heap_dead; /* nodes whose timer was cancelled */
+    int timers_first; /* whose turn it is when timers and descriptors compete */
     maelys_sys_backend_event_t *raw_events;
     size_t raw_capacity;
 };
@@ -529,6 +530,32 @@ static maelys_sys_result_t wait_timeout(
     return MAELYS_SYS_OK;
 }
 
+/*
+ * How many timers are due, counted without spending any and no further than
+ * limit. A heap keeps what is due above what is not, so the walk goes down
+ * through due nodes only, and its stack never holds more than one pending
+ * node per level. A cancelled node still in the heap is counted: that only
+ * asks the kernel for fewer events than the array could hold.
+ */
+static size_t count_due_timers(const maelys_sys_loop_t *loop, uint64_t now, size_t limit) {
+    size_t stack[8 * sizeof(size_t) + 2];
+    size_t depth = 0;
+    size_t count = 0;
+    if (!loop->timer_heap_count || loop->timer_heap[0].deadline_ms > now) return 0;
+    stack[depth++] = 0;
+    while (depth && count < limit) {
+        size_t index = stack[--depth];
+        ++count;
+        for (size_t child = index * 2u + 1u; child <= index * 2u + 2u; ++child) {
+            if (child < loop->timer_heap_count &&
+                loop->timer_heap[child].deadline_ms <= now) {
+                stack[depth++] = child;
+            }
+        }
+    }
+    return count;
+}
+
 maelys_sys_result_t maelys_sys_loop_step(
     maelys_sys_loop_t *loop,
     uint64_t deadline_ms,
@@ -545,9 +572,9 @@ maelys_sys_result_t maelys_sys_loop_step(
         *out_step_result = MAELYS_SYS_STEP_STOPPED;
         return MAELYS_SYS_OK;
     }
-    /* Exactly the caller's capacity: the kernel rotates its ready list on
-     * what was reported, so asking for more than the caller receives would
-     * starve the watches it drops. The wakeup, level-triggered, rotates in
+    /* Never more than the caller receives: the kernel rotates its ready list
+     * on what was reported, so asking for more would starve the watches it
+     * drops. The wakeup, level-triggered, rotates in
      * like any other descriptor and stays pending until reported. */
     maelys_sys_result_t result = reserve_raw(loop, event_capacity);
     if (result != MAELYS_SYS_OK) return result;
@@ -555,27 +582,40 @@ maelys_sys_result_t maelys_sys_loop_step(
         uint64_t now = 0;
         result = maelys_sys_monotonic_ms(&now);
         if (result != MAELYS_SYS_OK) return result;
-        size_t due = collect_due_timers(loop, now, events, event_capacity);
-        if (due) {
-            *out_event_count = due;
-            *out_step_result = MAELYS_SYS_STEP_PROGRESS;
-            return MAELYS_SYS_OK;
-        }
+        /* A timer that is due does not excuse the step from asking the
+         * kernel: one due at every step would keep every descriptor
+         * unheard for as long as it is re-armed. It only makes the question
+         * one without wait. No timer is spent before the kernel has
+         * answered, so an error or a stop still loses none. When timers and
+         * descriptors could each fill the array, they go first in turn:
+         * the timers keep their places on their turn, and take what the
+         * descriptors leave on the other. */
+        prune_heap(loop);
+        size_t due = count_due_timers(loop, now, event_capacity);
+        int timers_first = loop->timers_first;
+        size_t room = event_capacity;
+        if (due && timers_first) room -= due < room ? due : room;
         int timeout = 0;
-        result = wait_timeout(loop, deadline_ms, &timeout);
-        if (result != MAELYS_SYS_OK) return result;
+        if (!due) {
+            result = wait_timeout(loop, deadline_ms, &timeout);
+            if (result != MAELYS_SYS_OK) return result;
+        }
         size_t raw_count = 0;
-        result = loop->ops->wait(loop->backend, timeout,
-            loop->raw_events, event_capacity, &raw_count);
-        if (result == MAELYS_SYS_ERR_OS && errno == EINTR) continue;
-        if (result != MAELYS_SYS_OK) return result;
+        if (room) {
+            result = loop->ops->wait(loop->backend, timeout,
+                loop->raw_events, room, &raw_count);
+            if (result == MAELYS_SYS_ERR_OS && errno == EINTR) continue;
+            if (result != MAELYS_SYS_OK) return result;
+        }
+        if (due) loop->timers_first = !timers_first;
         size_t produced = 0;
         uint64_t serial = ++loop->step_serial;
         for (size_t i = 0; i < raw_count; ++i) {
             maelys_sys_backend_event_t *raw = &loop->raw_events[i];
             if (raw->watch_id == 0) {
-                /* The backend reported at most event_capacity events, so
-                 * the wake always fits; it is consumed only once reported. */
+                /* The backend reported no more events than there is room
+                 * for, so the wake always fits; it is consumed only once
+                 * reported. */
                 result = maelys_sys_wakeup_consume(loop->wakeup);
                 if (result != MAELYS_SYS_OK) return result;
                 if (atomic_load_explicit(&loop->stopped, memory_order_acquire)) {

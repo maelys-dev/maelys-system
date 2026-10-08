@@ -127,6 +127,13 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_loop_timer_cancel(
  * An ERR_OS from step reports no event. Readiness is level-triggered and a
  * due timer is spent only by the step that returns it, so what was ready is
  * reported by a later step.
+ *
+ * Every step asks the kernel, without waiting when a timer is already due:
+ * a timer due again at each step, as a periodic one is for a caller slower
+ * than its period, does not keep descriptors unheard. When timers and
+ * descriptors could each fill the array, they go first in turn, so neither
+ * waits more than one step for the other. The order of events within the
+ * array says nothing.
  * step accepts MAELYS_SYS_DEADLINE_INFINITE and then waits for an event, timer,
  * wake or stop without imposing its own deadline.
  *
