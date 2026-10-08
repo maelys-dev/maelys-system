@@ -57,7 +57,17 @@
   process-launch.c` starts a program with three descriptors, relays its
   output from a loop and stops it with the ladder; the installed archive
   and the Homebrew formula start a program and reap it.
-- Mutation gate at seventy-nine, eleven of them on processes.
+- `maelys_sys_socket_receive` on an `AF_UNIX` `SOCK_DGRAM` handle took an
+  empty datagram for the end of a stream and answered `ERR_CLOSED`, measured
+  on both hosts, since 0.10.1 sent every Unix handle through the
+  control-aware path that closes attached descriptors. Found by an audit of
+  0.12.3; no consumer creates a datagram handle through this API. The
+  handle reads `SO_TYPE` once, when it is made: only a stream has an end,
+  and on a datagram socket a receive takes exactly one message, zero bytes
+  included, what did not fit gone with it, as `recv(2)` has it.
+- The backend tests give a connection over the loopback ten seconds and a
+  diagnostic; one second failed a run of `main` on a loaded macOS runner.
+- Mutation gate at eighty: eleven on processes, one on the datagram end.
 
 Decisions: the primitive starts exactly what it is told; judging whether a
 file may be run stays with the invoker that judges; no wait on a process
