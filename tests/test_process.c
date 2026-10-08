@@ -34,9 +34,19 @@
     } \
 } while (0)
 
+/* What the child saw, when it is not what was expected. */
+#define CHECK_SEEN(seen, expected) do { \
+    if (strcmp((seen), (expected)) != 0) { \
+        fprintf(stderr, "%s:%d the child saw \"%s\", expected \"%s\"\n", \
+            __FILE__, __LINE__, (seen), (expected)); \
+        return 1; \
+    } \
+} while (0)
+
 #define PATH_ROOM 512
 
-static char self[PATH_ROOM];
+/* A fortified realpath refuses a buffer shorter than PATH_MAX. */
+static char self[4096];
 static char root[256];
 
 static int count_open(void) {
@@ -169,11 +179,12 @@ static maelys_sys_result_t start(const launch_t *launch, maelys_sys_process_t **
     return maelys_sys_process_spawn(&options, out);
 }
 
-/* Reads fd until end of stream, within 3 s. */
+/* Reads fd until end of stream, within 10 s: a sanitized program on a
+ * loaded host takes seconds to start. */
 static int read_all(int fd, char *buffer, size_t capacity) {
     size_t length = 0;
     uint64_t deadline = 0;
-    CHECK(maelys_sys_deadline_after(3000, &deadline) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_set_nonblocking(fd) == MAELYS_SYS_OK);
     for (;;) {
         unsigned flags = 0;
@@ -192,7 +203,7 @@ static int read_all(int fd, char *buffer, size_t capacity) {
 static int finish(maelys_sys_process_t **process, int expected_code) {
     maelys_sys_process_status_t status;
     uint64_t deadline = 0;
-    CHECK(maelys_sys_deadline_after(3000, &deadline) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(*process, deadline, &status) == MAELYS_SYS_OK);
     CHECK(status.exited && status.exit_code == expected_code && !status.signaled);
     CHECK(maelys_sys_process_release(process) == MAELYS_SYS_OK && *process == NULL);
@@ -211,7 +222,7 @@ static int test_stdio_layout(void) {
     CHECK(maelys_sys_fd_close(&pair[1]) == MAELYS_SYS_OK);
     char seen[512];
     CHECK(read_all(pair[0], seen, sizeof(seen)) == 0);
-    CHECK(strcmp(seen, "fds: 0 1 2 fd0:eof") == 0);
+    CHECK_SEEN(seen, "fds: 0 1 2 fd0:eof");
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&pair[0]) == MAELYS_SYS_OK);
     return 0;
@@ -242,7 +253,7 @@ static int test_isolated_layout(void) {
     CHECK(shutdown(pair[0], SHUT_WR) == 0);
     char seen[512];
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK(strcmp(seen, "fds: 0 1 2 3 4 fd0:eof fd3:- fd4:- fd5:.") == 0);
+    CHECK_SEEN(seen, "fds: 0 1 2 3 4 fd0:eof fd3:- fd4:- fd5:.");
     CHECK(finish(&process, 0) == 0);
     for (int index = 0; index < 40; ++index) CHECK(maelys_sys_fd_close(&stray[index]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK && maelys_sys_fd_close(&profile) == MAELYS_SYS_OK);
@@ -276,7 +287,7 @@ static int test_table_as_a_whole(void) {
     CHECK(read_all(out_reader, seen, sizeof(seen)) == 0);
     snprintf(expected, sizeof(expected), "fds: 0 1 %d %d fd0:eof fd%d:B fd%d:A",
         s1 < s2 ? s1 : s2, s1 < s2 ? s2 : s1, s1, s2);
-    CHECK(strcmp(seen, expected) == 0);
+    CHECK_SEEN(seen, expected);
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out_reader) == MAELYS_SYS_OK);
     /* {a->6, a->7}: both read the pipe, one letter each. */
@@ -286,7 +297,7 @@ static int test_table_as_a_whole(void) {
     CHECK(start(&again, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK(strcmp(seen, "fds: 0 1 6 7 fd0:eof fd6:A fd7:A") == 0);
+    CHECK_SEEN(seen, "fds: 0 1 6 7 fd0:eof fd6:A fd7:A");
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&a[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&a[1]) == MAELYS_SYS_OK);
@@ -386,7 +397,7 @@ static int test_environment(void) {
     CHECK(start(&explicit, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK(strcmp(seen, "env:2 var:yes") == 0);
+    CHECK_SEEN(seen, "env:2 var:yes");
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     /* NULL: the parent's own, counted here. */
@@ -402,7 +413,7 @@ static int test_environment(void) {
     CHECK(start(&inherited, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK(strcmp(seen, expected) == 0);
+    CHECK_SEEN(seen, expected);
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     return 0;
@@ -423,11 +434,11 @@ static int where(const char *cwd, unsigned flags, char *seen, size_t capacity) {
 }
 
 static int test_cwd_session_group(void) {
-    char seen[PATH_ROOM + 64], expected[PATH_ROOM + 64], resolved[PATH_ROOM];
+    char seen[4096 + 64], expected[4096 + 64], resolved[4096];
     CHECK(realpath(root, resolved) != NULL);
     CHECK(where(root, 0, seen, sizeof(seen)) == 0);
     snprintf(expected, sizeof(expected), "cwd:%s sid:0 pgid:0", resolved);
-    CHECK(strcmp(seen, expected) == 0);
+    CHECK_SEEN(seen, expected);
     CHECK(where(NULL, MAELYS_SYS_PROCESS_NEW_SESSION, seen, sizeof(seen)) == 0);
     CHECK(strstr(seen, " sid:1 pgid:1") != NULL);
     CHECK(where(NULL, MAELYS_SYS_PROCESS_NEW_PROCESS_GROUP, seen, sizeof(seen)) == 0);

@@ -23,7 +23,8 @@
 
 #define PATH_ROOM 512
 
-static char self[PATH_ROOM];
+/* A fortified realpath refuses a buffer shorter than PATH_MAX. */
+static char self[4096];
 static const char *fault_step;
 static int fault_errno;
 static int fault_skip; /* matches to let through before the step fires */
@@ -219,7 +220,10 @@ static int test_layout_without_close_range(void) {
         length += (size_t)got;
     }
     seen[length] = '\0';
-    CHECK(strcmp(seen, "fds: 0 1 2 3") == 0);
+    if (strcmp(seen, "fds: 0 1 2 3") != 0) {
+        fprintf(stderr, "the child saw \"%s\"\n", seen);
+        return 1;
+    }
     maelys_sys_process_status_t status;
     uint64_t deadline = 0;
     CHECK(maelys_sys_deadline_after(3000, &deadline) == MAELYS_SYS_OK);
