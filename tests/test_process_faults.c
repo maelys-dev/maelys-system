@@ -11,6 +11,7 @@
 
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #define CHECK(condition) do { \
@@ -106,7 +107,10 @@ static int child_mode(const char *mode, const char *argument) {
         char line[256];
         int n = snprintf(line, sizeof(line), "fds:");
         for (int fd = 0; fd < 64; ++fd) {
-            if (fcntl(fd, F_GETFD) >= 0) n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
+            struct stat status;
+            if (fcntl(fd, F_GETFD) < 0) continue;
+            n += snprintf(line + n, sizeof(line) - (size_t)n, fd < 3 ? " %d" : " %d(%s)", fd,
+                fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) ? "sock" : "other");
         }
         (void)!write(1, line, (size_t)n);
         return 0;
@@ -220,7 +224,7 @@ static int test_layout_without_close_range(void) {
         length += (size_t)got;
     }
     seen[length] = '\0';
-    if (strcmp(seen, "fds: 0 1 2 3") != 0) {
+    if (strcmp(seen, "fds: 0 1 2 3(sock)") != 0) {
         fprintf(stderr, "the child saw \"%s\"\n", seen);
         return 1;
     }

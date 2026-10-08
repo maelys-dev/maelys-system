@@ -90,13 +90,29 @@ static void say(const char *text) {
     }
 }
 
-/* fdlist [FD...]: the open descriptors, what 0 says, and one byte from
- * each descriptor named. */
+
+/* What a descriptor is, for the listing: a sanitizer runtime may open one
+ * of its own in the program, and the listing then says which it is. */
+static const char *fd_kind(int fd) {
+    struct stat status;
+    if (fstat(fd, &status) != 0) return "?";
+    if (S_ISSOCK(status.st_mode)) return "sock";
+    if (S_ISFIFO(status.st_mode)) return "fifo";
+    if (S_ISCHR(status.st_mode)) return "chr";
+    if (S_ISREG(status.st_mode)) return "reg";
+    if (S_ISDIR(status.st_mode)) return "dir";
+    return "other";
+}
+
+/* fdlist [FD...]: the open descriptors, with their kind from 3 up, what 0
+ * says, and one byte from each descriptor named. */
 static int child_fdlist(int argc, char **argv) {
     char line[512];
     int n = snprintf(line, sizeof(line), "fds:");
     for (int fd = 0; fd < 64; ++fd) {
-        if (fcntl(fd, F_GETFD) >= 0) n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
+        if (fcntl(fd, F_GETFD) < 0) continue;
+        if (fd < 3) n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
+        else n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(%s)", fd, fd_kind(fd));
     }
     char byte = 0;
     ssize_t got = read(0, &byte, 1);
@@ -253,7 +269,7 @@ static int test_isolated_layout(void) {
     CHECK(shutdown(pair[0], SHUT_WR) == 0);
     char seen[512];
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 2 3 4 fd0:eof fd3:- fd4:- fd5:.");
+    CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:- fd5:.");
     CHECK(finish(&process, 0) == 0);
     for (int index = 0; index < 40; ++index) CHECK(maelys_sys_fd_close(&stray[index]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK && maelys_sys_fd_close(&profile) == MAELYS_SYS_OK);
@@ -285,7 +301,7 @@ static int test_table_as_a_whole(void) {
     int out_reader = out[0];
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out_reader, seen, sizeof(seen)) == 0);
-    snprintf(expected, sizeof(expected), "fds: 0 1 %d %d fd0:eof fd%d:B fd%d:A",
+    snprintf(expected, sizeof(expected), "fds: 0 1 %d(fifo) %d(fifo) fd0:eof fd%d:B fd%d:A",
         s1 < s2 ? s1 : s2, s1 < s2 ? s2 : s1, s1, s2);
     CHECK_SEEN(seen, expected);
     CHECK(finish(&process, 0) == 0);
@@ -297,7 +313,7 @@ static int test_table_as_a_whole(void) {
     CHECK(start(&again, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 6 7 fd0:eof fd6:A fd7:A");
+    CHECK_SEEN(seen, "fds: 0 1 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A");
     CHECK(finish(&process, 0) == 0);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&a[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&a[1]) == MAELYS_SYS_OK);
