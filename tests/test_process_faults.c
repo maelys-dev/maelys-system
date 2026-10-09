@@ -115,11 +115,11 @@ static int child_mode(const char *mode, const char *argument) {
             socklen_t length = (socklen_t)sizeof(peer);
             if (fcntl(fd, F_GETFD) < 0) continue;
             memset(&peer, 0, sizeof(peer));
-            if (fd < 3) {
-                n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
-            } else if (fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) &&
+            if (fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) &&
                 getpeername(fd, (struct sockaddr *)&peer, &length) == 0 && peer.sun_path[0]) {
                 n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(sock:%.100s)", fd, peer.sun_path);
+            } else if (fd < 3) {
+                n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
             } else {
                 n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(%s)", fd,
                     fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) ? "sock" : "other");
@@ -237,14 +237,20 @@ static int test_layout_without_close_range(void) {
         length += (size_t)got;
     }
     seen[length] = '\0';
-    /* A socket the program connected itself is not one of the table's. */
-    char *entry;
-    while ((entry = strstr(seen, "(sock:")) != NULL) {
+    /* A socket the program connected itself, on a number the table (0 to 3
+     * here) does not name, is not one of the table's: set apart. */
+    char *cursor = seen, *entry;
+    while ((entry = strstr(cursor, "(sock:")) != NULL) {
         char *start = entry, *end = strchr(entry, ')');
         while (start > seen && start[-1] != ' ') --start;
         if (!end) break;
+        if (atoi(start) <= 3) {
+            cursor = end;
+            continue;
+        }
         fprintf(stderr, "note: the program opened %.*s itself; set apart\n", (int)(end + 1 - start), start);
         memmove(start > seen ? start - 1 : start, end + 1, strlen(end + 1) + 1);
+        cursor = start > seen ? start - 1 : start;
     }
     if (strcmp(seen, "fds: 0 1 2 3(sock)") != 0) {
         fprintf(stderr, "the child saw \"%s\"\n", seen);
