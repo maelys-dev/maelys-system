@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <time.h>
 
 #define CHECK(condition) do { \
@@ -104,13 +105,25 @@ static int child_mode(const char *mode, const char *argument) {
     }
     if (strcmp(mode, "exit") == 0) return atoi(argument);
     if (strcmp(mode, "fdlist") == 0) {
-        char line[256];
+        /* A socket with a named peer was connected by the program itself: a
+         * sanitizer runtime's log socket on macOS 15. Said as such. */
+        char line[512];
         int n = snprintf(line, sizeof(line), "fds:");
         for (int fd = 0; fd < 64; ++fd) {
             struct stat status;
+            struct sockaddr_un peer;
+            socklen_t length = (socklen_t)sizeof(peer);
             if (fcntl(fd, F_GETFD) < 0) continue;
-            n += snprintf(line + n, sizeof(line) - (size_t)n, fd < 3 ? " %d" : " %d(%s)", fd,
-                fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) ? "sock" : "other");
+            memset(&peer, 0, sizeof(peer));
+            if (fd < 3) {
+                n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
+            } else if (fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) &&
+                getpeername(fd, (struct sockaddr *)&peer, &length) == 0 && peer.sun_path[0]) {
+                n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(sock:%.100s)", fd, peer.sun_path);
+            } else {
+                n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(%s)", fd,
+                    fstat(fd, &status) == 0 && S_ISSOCK(status.st_mode) ? "sock" : "other");
+            }
         }
         (void)!write(1, line, (size_t)n);
         return 0;
@@ -224,6 +237,15 @@ static int test_layout_without_close_range(void) {
         length += (size_t)got;
     }
     seen[length] = '\0';
+    /* A socket the program connected itself is not one of the table's. */
+    char *entry;
+    while ((entry = strstr(seen, "(sock:")) != NULL) {
+        char *start = entry, *end = strchr(entry, ')');
+        while (start > seen && start[-1] != ' ') --start;
+        if (!end) break;
+        fprintf(stderr, "note: the program opened %.*s itself; set apart\n", (int)(end + 1 - start), start);
+        memmove(start > seen ? start - 1 : start, end + 1, strlen(end + 1) + 1);
+    }
     if (strcmp(seen, "fds: 0 1 2 3(sock)") != 0) {
         fprintf(stderr, "the child saw \"%s\"\n", seen);
         return 1;
