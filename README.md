@@ -105,6 +105,10 @@ the optional umbrella header `maelys/sys.h`.
   `maelys_sys_loop_wake` and `maelys_sys_loop_stop` take a mutex on macOS: a
   handler writes one byte to a non-blocking pipe of the caller's own, which
   the loop watches.
+- A process handle reserves its number from `spawn` to `release`: nothing
+  is reaped before, and the caller reaps nothing blindly (no `wait(-1)`,
+  SIGCHLD neither ignored nor `SA_NOCLDWAIT`). In the program, exactly the
+  targets of the table are open. No wait on a process is unbounded.
 - A loop and a directory watch do not cross `fork`. macOS does not give the
   child their kqueue; Linux shares the parent's epoll and inotify instances
   with it, so an unwatch, a remove or a destroy in the child takes the

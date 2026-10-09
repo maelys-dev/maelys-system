@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.13.0 - 2026-10-08
+
+- Processes, `maelys/sys/process.h`: start a program with exactly the
+  descriptors named, follow it, stop it within a bound, and tell whether a
+  number still names the process it did. Two consumers carry it by hand
+  today: a protocol launcher that forks, lays out descriptors, execs,
+  waits with a timeout and escalates from SIGTERM to SIGKILL; and a watcher
+  of processes it did not start, which needs a number, a birth and a boot
+  to be sure of one. A third invoker keeps its own rules (PATH, shebang, a
+  judgement on the file, 0, 1 and 2 as they are) and may come under this
+  later. The contract was written from measurements on Linux 6.10 and
+  macOS 26.6:
+  - the table is applied as a whole, which neither host does by itself:
+    `posix_spawn` applies its file actions in order and `dup2` in sequence
+    does the same, so {3->4, 4->3} copied the old 3 twice on both. Every
+    source is first duplicated close-on-exec above every target, and the
+    targets are made from the duplicates; the fixed array that holds them,
+    with nothing allocated, is what bounds the table at 32;
+  - on Linux, "everything else closed" is `close_range` with
+    `CLOSE_RANGE_CLOEXEC` over every descriptor, 0 included, before the
+    targets are made: marking after making them marks the targets too, and
+    `dup2(3, 3)` is a no-op that clears nothing, both measured. A kernel
+    without `close_range` (before 5.11) gets the names of `/proc/self/fd`
+    read with `getdents64` into a buffer on the stack, in the child, with
+    nothing allocated; a system without `/proc` gets every number up to the
+    limit. On macOS it is `posix_spawn` with `POSIX_SPAWN_CLOEXEC_DEFAULT`,
+    and no fork at all;
+  - the end of a program is a descriptor for a loop to watch: a pidfd on
+    Linux, a kqueue with `EVFILT_PROC` on macOS. Registering that kqueue on
+    a program that has already ended answers `ESRCH`, measured, so the
+    descriptor is then made readable by a user event instead, and a wait
+    never sleeps for a program that is gone. `pidfd_open` on such a program
+    succeeds and is readable at once;
+  - a wait is bounded by an absolute monotonic deadline like every wait
+    here, sleeps on that descriptor and polls nothing; `terminate` is
+    bounded by its two durations; `release` never blocks and says `STATE`
+    when it abandons a running program;
+  - a missing path is `ERR_NOT_FOUND`; a file the caller may not run is
+    `ERR_OS` with `EACCES`, like every refusal that is not the frequent
+    one. On macOS the process a refused `posix_spawn` aborted stays
+    visible to `waitpid(-1, WNOHANG)` for 15 to 40 microseconds and leaves
+    no zombie, measured, and the header says so;
+  - an identity is three numbers, compared and never interpreted: the
+    number, the birth (`starttime` of `/proc/PID/stat` on Linux, read after
+    the last parenthesis; `pbi_start` on macOS) and the boot. A program
+    that has ended and is not reaped keeps an identity on Linux and has
+    none on macOS, measured; `alive` answers 0 for a namesake and `ERR_OS`
+    when the host refuses to say, which a `bool` could not;
+  - `fork` costs 0.4 ms and glibc's `posix_spawn` 0.2 ms for a `/bin/true`
+    under a parent with 512 MB touched: Linux keeps `fork`, whose child
+    runs async-signal-safe calls only.
+  Two sides to the reserved number: the caller reaps nothing blindly and
+  leaves SIGCHLD neither ignored nor `SA_NOCLDWAIT`; `wake` and `stop` of
+  a loop are still never called from a handler of it. `examples/
+  process-launch.c` starts a program with three descriptors, relays its
+  output from a loop and stops it with the ladder; the installed archive
+  and the Homebrew formula start a program and reap it.
+- `maelys_sys_socket_receive` on an `AF_UNIX` `SOCK_DGRAM` handle took an
+  empty datagram for the end of a stream and answered `ERR_CLOSED`, measured
+  on both hosts, since 0.10.1 sent every Unix handle through the
+  control-aware path that closes attached descriptors. Found by an audit of
+  0.12.3; no consumer creates a datagram handle through this API. The
+  handle reads `SO_TYPE` once, when it is made: only a stream has an end,
+  and on a datagram socket a receive takes exactly one message, zero bytes
+  included, what did not fit gone with it, as `recv(2)` has it.
+- The backend tests give a connection over the loopback ten seconds and a
+  diagnostic; one second failed a run of `main` on a loaded macOS runner.
+- Mutation gate at eighty: eleven on processes, one on the datagram end.
+
+Decisions: the primitive starts exactly what it is told; judging whether a
+file may be run stays with the invoker that judges; no wait on a process
+is unbounded; no process is ever reaped by -1.
+
 ## 0.12.3 - 2026-10-07
 
 One correction to the loop, then every public header read against three

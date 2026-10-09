@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies sixty-eight one-line faults, twelve of them on Linux only
-and nine on macOS only, and
+directories, applies eighty one-line faults, fifteen of them on Linux only
+and twelve on macOS only, and
 requires the existing tests to reject every mutant. Thirteen target the
 reactor, the last four its fairness between timers and descriptors (0.12.3):
 a due timer excusing the step from asking the kernel, timers keeping no
@@ -80,6 +80,19 @@ kept as if nothing happened; the same directory admitted twice; a final
 symbolic link followed; and, on Linux only, a write in place reported,
 which kqueue cannot.
 
+One targets the end of a Unix socket (0.13): every Unix handle taken for
+a stream again, so that an empty datagram comes back as the end.
+
+Eleven target processes (0.13). Five hold on both hosts: a signal sent
+after the program was reaped, a ladder that stops at SIGTERM, a release
+that hides a running program, an identity reduced to a number, and the
+end of a foreign process registered without the identity checked again.
+The others are written once per kernel interface: the table applied from
+the sources instead of the staged duplicates, which breaks the exchange;
+everything the parent held kept in the program; and, on Linux, a failed
+exec that the parent never hears; on macOS, a program ended before its
+descriptor is made whose descriptor never becomes readable.
+
 Five more target the bounded poll (0.12.1). On each kernel interface, a
 poll that goes on reading while a writer goes on writing, which a fault
 point that changes every watched directory before each read turns into a
@@ -88,7 +101,9 @@ Linux, where an index leads from a watch number to its entry, a gap left in
 that index when an entry is released, which entries removed and added past
 the capacity expose.
 
-The sweep is deterministic and has a 60-second process timeout per mutant. A
+The sweep is deterministic and has a 120-second process timeout per
+mutant, three times what the suite takes on the slowest host measured, so
+that a loaded host does not pass a survivor off as a hang. A
 changed implementation must update anchors and preserve or strengthen the
 fault set. Surviving mutants fail the gate; a missing mutation anchor also
 fails it. The harness targets load-bearing invariants and is not a substitute

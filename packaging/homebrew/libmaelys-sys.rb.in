@@ -47,7 +47,17 @@ class LibmaelysSys < Formula
         if (maelys_sys_dirwatch_poll(dirwatch, &change, 1, &count) != MAELYS_SYS_OK) return 9;
         if (count != 1 || change.token != 7 || change.entry != entry ||
           change.flags != MAELYS_SYS_DIRWATCH_CHANGED) return 10;
-        return maelys_sys_dirwatch_destroy(&dirwatch) == MAELYS_SYS_OK ? 0 : 11;
+      if (maelys_sys_dirwatch_destroy(&dirwatch) != MAELYS_SYS_OK) return 11;
+      /* A program started with no descriptor at all, followed, reaped. */
+      char *argv[] = {"sh", "-c", "exit 3", 0};
+      maelys_sys_process_options_t options = {.path = "/bin/sh", .argv = argv};
+      maelys_sys_process_t *process = 0;
+      maelys_sys_process_status_t status;
+      if (maelys_sys_process_spawn(&options, &process) != MAELYS_SYS_OK) return 12;
+      if (maelys_sys_deadline_after(3000, &deadline) != MAELYS_SYS_OK) return 13;
+      if (maelys_sys_process_wait(process, deadline, &status) != MAELYS_SYS_OK) return 14;
+      if (!status.exited || status.exit_code != 3) return 15;
+      return maelys_sys_process_release(&process) == MAELYS_SYS_OK ? 0 : 16;
       }
     EOS
     system ENV.cc, "-std=c11", "-pthread", "smoke.c", "-I#{include}", "-L#{lib}",

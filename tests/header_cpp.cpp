@@ -16,6 +16,11 @@ int main() {
     (void)fdpass_flags;
     maelys_sys_dirwatch_change_t dirwatch_change{};
     (void)dirwatch_change;
+    maelys_sys_process_options_t process_options{};
+    maelys_sys_process_fd_t process_fd{};
+    maelys_sys_process_status_t process_status{};
+    maelys_sys_process_identity_t process_identity{};
+    (void)process_options; (void)process_fd; (void)process_status; (void)process_identity;
     return result == MAELYS_SYS_OK && socket_handle == nullptr &&
         state == MAELYS_SYS_CONNECT_IN_PROGRESS && options.reuse_address == 0
         ? 0 : 1;

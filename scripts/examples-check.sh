@@ -27,4 +27,11 @@ done
 wait "$watcher"
 test "$(cat "$watched.out")" = "watching $watched: 0 entries
 reread $watched: 1 entries"
+
+# process-launch: a program that writes and ends, then one that is stopped
+# by the ladder when the grace runs out.
+test "$("$examples_dir/process-launch" 5000 /bin/sh -c 'echo hello; echo there >&2; exit 4')" = "out: hello
+out: there
+ended: exit 4"
+test "$("$examples_dir/process-launch" 400 /bin/sh -c 'trap "" TERM; exec sleep 30')" = "stopped: signal 9"
 printf '%s\n' "examples check: ok"
