@@ -35,26 +35,41 @@
     } \
 } while (0)
 
-/* A descriptor the program connected itself, to a named peer, is not one
- * the table let through: a sanitizer runtime on macOS 15 opens one to the
- * log daemon before main. Such entries are set apart and noted. */
-static void set_apart_named_sockets(char *seen) {
+/* Whether a number is one of the table's targets, given as " 0 1 2 ". */
+static int in_table(const char *targets, int fd) {
+    char text[16];
+    snprintf(text, sizeof(text), " %d ", fd);
+    return strstr(targets, text) != NULL;
+}
+
+/* A socket with a named peer on a number the table does not name was
+ * connected by the program itself: a sanitizer runtime on macOS 15 opens
+ * one to the log daemon before main. Such entries, and only such, are set
+ * apart and noted; a named socket on a number the table does name is left
+ * where it is, and fails the comparison as it should. */
+static void set_apart_named_sockets(char *seen, const char *targets) {
+    char *cursor = seen;
     char *entry;
-    while ((entry = strstr(seen, "(sock:")) != NULL) {
+    while ((entry = strstr(cursor, "(sock:")) != NULL) {
         char *start = entry;
         while (start > seen && start[-1] != ' ') --start;
         char *end = strchr(entry, ')');
         if (!end) break;
         ++end;
+        if (in_table(targets, atoi(start))) {
+            cursor = end;
+            continue;
+        }
         fprintf(stderr, "note: the program opened %.*s itself; set apart\n", (int)(end - start), start);
         if (start > seen) --start; /* the space before */
         memmove(start, end, strlen(end) + 1);
+        cursor = start;
     }
 }
 
 /* What the child saw, when it is not what was expected. */
-#define CHECK_SEEN(seen, expected) do { \
-    set_apart_named_sockets(seen); \
+#define CHECK_SEEN(seen, expected, targets) do { \
+    set_apart_named_sockets(seen, targets); \
     if (strcmp((seen), (expected)) != 0) { \
         fprintf(stderr, "%s:%d the child saw \"%s\", expected \"%s\"\n", \
             __FILE__, __LINE__, (seen), (expected)); \
@@ -145,8 +160,15 @@ static int child_fdlist(int argc, char **argv) {
     int n = snprintf(line, sizeof(line), "fds:");
     for (int fd = 0; fd < 64; ++fd) {
         if (fcntl(fd, F_GETFD) < 0) continue;
-        if (fd < 3) n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
-        else n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(%s)", fd, fd_kind(fd));
+        const char *kind = fd_kind(fd);
+        /* 0, 1 and 2 are named by number alone, since the kind of an
+         * inherited 2 is the test's own; except a socket with a named peer,
+         * which no table here passes and which the parent must see. */
+        if (fd < 3 && strncmp(kind, "sock:", 5) != 0) {
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %d", fd);
+        } else {
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %d(%s)", fd, kind);
+        }
     }
     char byte = 0;
     ssize_t got = read(0, &byte, 1);
@@ -270,6 +292,19 @@ static int finish(maelys_sys_process_t **process, int expected_code) {
     return 0;
 }
 
+/* The setting apart itself: a named socket on a number outside the table
+ * goes, one on a number the table names stays and fails the comparison. */
+static int test_set_apart(void) {
+    char seen[128];
+    snprintf(seen, sizeof(seen), "fds: 0 1 2(sock:/var/run/syslog) 3(sock) 5(sock:/var/run/syslog) fd0:eof");
+    set_apart_named_sockets(seen, " 0 1 3 ");
+    CHECK(strcmp(seen, "fds: 0 1 3(sock) fd0:eof") == 0);
+    snprintf(seen, sizeof(seen), "fds: 0 1 2(sock:/var/run/syslog) 3(sock) fd0:eof");
+    set_apart_named_sockets(seen, " 0 1 2 3 ");
+    CHECK(strcmp(seen, "fds: 0 1 2(sock:/var/run/syslog) 3(sock) fd0:eof") == 0);
+    return 0;
+}
+
 /* The STDIO layout: a socket pair on 0 and 1, 2 inherited. */
 static int test_stdio_layout(void) {
     int pair[2];
@@ -283,7 +318,7 @@ static int test_stdio_layout(void) {
     char seen[512];
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(pair[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 2 fd0:eof");
+    CHECK_SEEN(seen, "fds: 0 1 2 fd0:eof", " 0 1 2 ");
     CHECK(maelys_sys_fd_close(&pair[0]) == MAELYS_SYS_OK);
     return 0;
 }
@@ -316,7 +351,7 @@ static int test_isolated_layout(void) {
     char seen[512];
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:-");
+    CHECK_SEEN(seen, "fds: 0 1 2 3(sock) 4(chr) fd0:eof fd3:- fd4:-", " 0 1 2 3 4 ");
     for (int index = 0; index < 40; ++index) CHECK(maelys_sys_fd_close(&stray[index]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK && maelys_sys_fd_close(&profile) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
@@ -353,7 +388,9 @@ static int test_table_as_a_whole(void) {
     CHECK(read_all(out_reader, seen, sizeof(seen)) == 0);
     snprintf(expected, sizeof(expected), "fds: 0 1 2 %d(fifo) %d(fifo) fd0:eof fd%d:B fd%d:A",
         s1 < s2 ? s1 : s2, s1 < s2 ? s2 : s1, s1, s2);
-    CHECK_SEEN(seen, expected);
+    char targets[64];
+    snprintf(targets, sizeof(targets), " 0 1 2 %d %d ", s1, s2);
+    CHECK_SEEN(seen, expected, targets);
     CHECK(maelys_sys_fd_close(&out_reader) == MAELYS_SYS_OK);
     /* {a->6, a->7}: both read the pipe, one letter each. */
     CHECK(maelys_sys_pipe_cloexec(out) == MAELYS_SYS_OK);
@@ -363,7 +400,7 @@ static int test_table_as_a_whole(void) {
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "fds: 0 1 2 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A");
+    CHECK_SEEN(seen, "fds: 0 1 2 6(fifo) 7(fifo) fd0:eof fd6:A fd7:A", " 0 1 2 6 7 ");
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&devnull) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&a[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&a[1]) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&b[0]) == MAELYS_SYS_OK && maelys_sys_fd_close(&b[1]) == MAELYS_SYS_OK);
@@ -463,7 +500,7 @@ static int test_environment(void) {
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, "env:2 var:yes");
+    CHECK_SEEN(seen, "env:2 var:yes", " 1 ");
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     /* NULL: the parent's own, counted here. */
     extern char **environ;
@@ -479,7 +516,7 @@ static int test_environment(void) {
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
-    CHECK_SEEN(seen, expected);
+    CHECK_SEEN(seen, expected, " 1 ");
     CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
     return 0;
 }
@@ -503,7 +540,7 @@ static int test_cwd_session_group(void) {
     CHECK(realpath(root, resolved) != NULL);
     CHECK(where(root, 0, seen, sizeof(seen)) == 0);
     snprintf(expected, sizeof(expected), "cwd:%s sid:0 pgid:0", resolved);
-    CHECK_SEEN(seen, expected);
+    CHECK_SEEN(seen, expected, " 1 ");
     CHECK(where(NULL, MAELYS_SYS_PROCESS_NEW_SESSION, seen, sizeof(seen)) == 0);
     CHECK(strstr(seen, " sid:1 pgid:1") != NULL);
     CHECK(where(NULL, MAELYS_SYS_PROCESS_NEW_PROCESS_GROUP, seen, sizeof(seen)) == 0);
@@ -784,7 +821,7 @@ int main(int argc, char **argv) {
     int written = snprintf(root, sizeof(root), "%s/maelys-sys-process.XXXXXX", base);
     if (written <= 0 || (size_t)written >= sizeof(root) || !mkdtemp(root)) return 1;
     int before = count_open();
-    int failed = test_stdio_layout() || test_isolated_layout() || test_table_as_a_whole() ||
+    int failed = test_set_apart() || test_stdio_layout() || test_isolated_layout() || test_table_as_a_whole() ||
         test_refusals() || test_start_refused() || test_environment() ||
         test_cwd_session_group() || test_wait_and_signal() || test_terminate_ladder() ||
         test_terminate_already_ended() || test_exit_fd_in_loop() || test_release_running() ||
@@ -802,6 +839,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "work directory not empty: %s\n", root);
         return 1;
     }
+    puts("ok - process a named socket outside the table is set apart, one inside is not");
     puts("ok - process STDIO layout: exactly 0 1 2");
     puts("ok - process ISOLATED layout beside forty stray descriptors: exactly 0 1 2 3 4");
     puts("ok - process table applied as a whole: an exchange, one source on two targets");
