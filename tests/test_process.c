@@ -256,12 +256,14 @@ static maelys_sys_result_t start(const launch_t *launch, maelys_sys_process_t **
     return maelys_sys_process_spawn(&options, out);
 }
 
-/* Waits for the program to end, within 10 s: a sanitized program on a
- * loaded host takes seconds to start. */
+/* Waits for the program to end, within 30 s: a sanitized program on a
+ * loaded host takes seconds to start, and an on-access scanner has held
+ * the first start of a freshly built test for twenty, measured on a
+ * developer's Mac. Each program here is that test itself. */
 static int ended(maelys_sys_process_t *process, int expected_code) {
     maelys_sys_process_status_t status;
     uint64_t deadline = 0;
-    CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_deadline_after(30000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
     CHECK(status.exited && status.exit_code == expected_code && !status.signaled);
     return 0;
@@ -336,6 +338,9 @@ static int test_isolated_layout(void) {
     CHECK(devnull >= 0);
     CHECK(maelys_sys_pipe_cloexec(out) == MAELYS_SYS_OK);
     CHECK(maelys_sys_socketpair_cloexec(SOCK_STREAM, pair) == MAELYS_SYS_OK);
+    /* Shut before the start: the program reads 3 without waiting, and must
+     * find its end already there, not race the parent to it. */
+    CHECK(shutdown(pair[0], SHUT_WR) == 0);
     int profile = open("/dev/null", O_RDONLY | O_CLOEXEC);
     CHECK(profile >= 0);
     maelys_sys_process_fd_t table[5] = {
@@ -347,7 +352,6 @@ static int test_isolated_layout(void) {
     maelys_sys_process_t *process = NULL;
     CHECK(start(&launch, &process) == MAELYS_SYS_OK && process);
     CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
-    CHECK(shutdown(pair[0], SHUT_WR) == 0);
     char seen[512];
     CHECK(finish(&process, 0) == 0);
     CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
