@@ -282,11 +282,22 @@ run_mutant_linux process-failed-exec-unheard src/process.c \
     '    if (report >= 0) {
         ssize_t written;' '    if (0) {
         ssize_t written;'
+run_mutant_linux process-signals-left-blocked src/process.c \
+    'return sigprocmask(SIG_SETMASK, &none, NULL) == 0 ? 0 : errno;' \
+    'return sigprocmask(SIG_BLOCK, &none, NULL) == 0 ? 0 : errno;'
+run_mutant_linux process-signals-left-ignored src/process.c \
+    'if (number == SIGKILL || number == SIGSTOP) continue;' 'continue;'
+run_mutant_darwin process-signals-left-blocked src/process.c \
+    'short flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK |' \
+    'short flags = POSIX_SPAWN_CLOEXEC_DEFAULT | 0 |'
+run_mutant_darwin process-signals-left-ignored src/process.c \
+    '            POSIX_SPAWN_SETSIGDEF;' '            0;'
 run_mutant_darwin process-table-not-staged src/process.c \
     'error = posix_spawn_file_actions_adddup2(&actions, staged[index], table->target[index]);' \
     'error = posix_spawn_file_actions_adddup2(&actions, table->source[index], table->target[index]);'
 run_mutant_darwin process-everything-kept src/process.c \
-    'short flags = POSIX_SPAWN_CLOEXEC_DEFAULT;' 'short flags = 0;'
+    'short flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK |' \
+    'short flags = POSIX_SPAWN_SETSIGMASK |'
 run_mutant_darwin process-ended-before-registration-unreadable src/process.c \
     'EV_SET(&change, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);' \
     'EV_SET(&change, 1, EVFILT_USER, 0, 0, 0, NULL);'

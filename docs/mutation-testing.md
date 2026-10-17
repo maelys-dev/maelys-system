@@ -1,8 +1,8 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies eighty one-line faults, fifteen of them on Linux only
-and twelve on macOS only, and
+directories, applies eighty-four one-line faults, seventeen of them on Linux only
+and fourteen on macOS only, and
 requires the existing tests to reject every mutant. Thirteen target the
 reactor, the last four its fairness between timers and descriptors (0.12.3):
 a due timer excusing the step from asking the kernel, timers keeping no
@@ -82,6 +82,9 @@ which kqueue cannot.
 
 One targets the end of a Unix socket (0.13): every Unix handle taken for
 a stream again, so that an empty datagram comes back as the end.
+
+Four target the signals of a started program (0.13.1), two per kernel
+interface: the mask left blocked, and the dispositions left ignored.
 
 Eleven target processes (0.13). Five hold on both hosts: a signal sent
 after the program was reaped, a ladder that stops at SIGTERM, a release

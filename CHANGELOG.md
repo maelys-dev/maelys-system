@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- A program started by `maelys_sys_process_spawn` no longer inherits what
+  its caller blocks or ignores. Measured on both hosts with 0.13.0: a
+  caller that blocks SIGTERM and SIGUSR1, as for a signalfd, and ignores
+  SIGPIPE and SIGUSR2 handed all four on, and `terminate` waited the whole
+  grace before SIGKILL ended a program that SIGTERM could not reach. The
+  program now starts with no signal blocked and every signal at its default
+  action: `posix_spawn` with `POSIX_SPAWN_SETSIGMASK` and
+  `POSIX_SPAWN_SETSIGDEF` on macOS; on Linux the child puts every
+  disposition back with every signal still blocked, then unblocks them,
+  and the calling thread's mask, blocked for the instant of the fork, is
+  restored before `spawn` returns. The same measurement now ends the
+  program by SIGTERM in a millisecond. Found by reading 0.13.0 for the
+  lifetime of owned process groups.
+- Mutation gate at eighty-four: two faults per host on the signals of a
+  started program.
+
 ## 0.13.0 - 2026-10-08
 
 - Processes, `maelys/sys/process.h`: start a program with exactly the

@@ -37,6 +37,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -198,6 +199,25 @@ static int mark_all_cloexec(rlim_t limit) {
     return 0;
 }
 
+/* Every signal back to its default action, then none blocked: what the
+ * caller blocks or ignores is not the program's. Dispositions first, while
+ * the fork has every signal blocked, so that no handler of the caller runs
+ * here. sigaction answers EINVAL for the numbers the C library keeps for
+ * itself, which stay as they are. */
+static int default_signals(void) {
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    (void)sigemptyset(&action.sa_mask);
+    for (int number = 1; number < NSIG; ++number) {
+        if (number == SIGKILL || number == SIGSTOP) continue;
+        (void)sigaction(number, &action, NULL);
+    }
+    sigset_t none;
+    (void)sigemptyset(&none);
+    return sigprocmask(SIG_SETMASK, &none, NULL) == 0 ? 0 : errno;
+}
+
 /* What runs in the child: async-signal-safe calls only, no allocation. A
  * failure is written as its errno to the report pipe and ends the child. */
 static void run_child(
@@ -227,6 +247,7 @@ static void run_child(
         setpgid(0, 0) != 0) {
         error = errno;
     }
+    if (!error) error = default_signals();
     if (!error) {
         (void)execve(options->path, options->argv, options->envp ? options->envp : environ);
         error = errno;
@@ -248,7 +269,23 @@ static maelys_sys_result_t start_program(
     if (PROCESS_FAULT("pipe") || pipe2(report, O_CLOEXEC) != 0) return MAELYS_SYS_ERR_OS;
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) limit.rlim_cur = 65536;
+    /* Every signal blocked in this thread for the instant of the fork: the
+     * child must not take one before it has put the dispositions back. The
+     * caller's mask is restored before anything else here. */
+    sigset_t every, caller;
+    (void)sigfillset(&every);
+    int masked = pthread_sigmask(SIG_SETMASK, &every, &caller);
+    if (masked != 0) {
+        (void)close(report[0]);
+        (void)close(report[1]);
+        errno = masked;
+        return MAELYS_SYS_ERR_OS;
+    }
     pid_t pid = PROCESS_FAULT("create") ? -1 : fork();
+    if (pid == 0) run_child(options, table, report[1], limit.rlim_cur);
+    int forked = errno;
+    (void)pthread_sigmask(SIG_SETMASK, &caller, NULL);
+    errno = forked;
     if (pid < 0) {
         int saved = errno;
         (void)close(report[0]);
@@ -256,7 +293,6 @@ static maelys_sys_result_t start_program(
         errno = saved;
         return MAELYS_SYS_ERR_OS;
     }
-    if (pid == 0) run_child(options, table, report[1], limit.rlim_cur);
     (void)close(report[1]);
     int error = 0;
     ssize_t got;
@@ -323,7 +359,19 @@ static maelys_sys_result_t start_program(
 #endif
     }
     if (!error) {
-        short flags = POSIX_SPAWN_CLOEXEC_DEFAULT;
+        /* What the caller blocks or ignores is not the program's: no signal
+         * blocked, every one at its default action. */
+        sigset_t none, every;
+        (void)sigemptyset(&none);
+        (void)sigfillset(&every);
+        (void)sigdelset(&every, SIGKILL);
+        (void)sigdelset(&every, SIGSTOP);
+        error = posix_spawnattr_setsigmask(&attributes, &none);
+        if (!error) error = posix_spawnattr_setsigdefault(&attributes, &every);
+    }
+    if (!error) {
+        short flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK |
+            POSIX_SPAWN_SETSIGDEF;
         if (options->flags & MAELYS_SYS_PROCESS_NEW_SESSION) flags |= POSIX_SPAWN_SETSID;
         if (options->flags & MAELYS_SYS_PROCESS_NEW_PROCESS_GROUP) {
             flags |= POSIX_SPAWN_SETPGROUP;
