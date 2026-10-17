@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.1 - 2026-10-17
 
 - A program started by `maelys_sys_process_spawn` no longer inherits what
   its caller blocks or ignores. Measured on both hosts with 0.13.0: a
@@ -15,8 +15,12 @@
   restored before `spawn` returns. The same measurement now ends the
   program by SIGTERM in a millisecond. Found by reading 0.13.0 for the
   lifetime of owned process groups.
+- A test of the ISOLATED layout raced the parent's shutdown of its socket
+  pair since its probes stopped blocking; the pair is shut before the
+  start. A program is given thirty seconds to end in the process tests.
 - Mutation gate at eighty-four: two faults per host on the signals of a
   started program.
+- Released through maelys-release v0.64.4: `VERSION` is written by `cut`.
 
 ## 0.13.0 - 2026-10-08
 
