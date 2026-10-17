@@ -15,6 +15,14 @@
  *   included, is not open in the program.
  * - spawn returns once the program has started, never before: an error is
  *   this start's, never the program's afterwards.
+ * - The program starts with no signal blocked and every signal at its
+ *   default action, whatever the calling thread blocks or the caller
+ *   ignores: a SIGPIPE the caller ignores, or a SIGTERM it blocks for a
+ *   signalfd, is not handed on, and the SIGTERM of terminate is not held
+ *   back. 0.13.0 handed both on, measured on both hosts. The
+ *   caller's own mask and dispositions are as they were; on Linux, spawn
+ *   blocks every signal in the calling thread for the instant of the fork
+ *   and restores the mask before it returns.
  * - The process number is reserved from spawn to release: nothing is
  *   reaped before, so a signal cannot reach a stranger that inherited the
  *   number. The contract has two sides: the caller does not reap blindly

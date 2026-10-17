@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -211,6 +212,31 @@ static int child_where(void) {
     return 0;
 }
 
+/* signals: which of four signals the program finds blocked or ignored. */
+static int child_signals(void) {
+    static const int numbers[4] = {SIGTERM, SIGUSR1, SIGPIPE, SIGUSR2};
+    static const char *const names[4] = {"TERM", "USR1", "PIPE", "USR2"};
+    sigset_t mask;
+    char line[128];
+    int n = snprintf(line, sizeof(line), "blocked:");
+    if (sigprocmask(SIG_SETMASK, NULL, &mask) != 0) return 3;
+    for (int index = 0; index < 4; ++index) {
+        if (sigismember(&mask, numbers[index]) == 1) {
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %s", names[index]);
+        }
+    }
+    n += snprintf(line + n, sizeof(line) - (size_t)n, " ignored:");
+    for (int index = 0; index < 4; ++index) {
+        struct sigaction action;
+        if (sigaction(numbers[index], NULL, &action) != 0) return 4;
+        if (action.sa_handler == SIG_IGN) {
+            n += snprintf(line + n, sizeof(line) - (size_t)n, " %s", names[index]);
+        }
+    }
+    say(line);
+    return 0;
+}
+
 static int run_child(int argc, char **argv) {
     const char *mode = argv[0];
     if (strcmp(mode, "fdlist") == 0) return child_fdlist(argc - 1, argv + 1);
@@ -226,6 +252,7 @@ static int run_child(int argc, char **argv) {
     }
     if (strcmp(mode, "exit") == 0) return atoi(argv[1]);
     if (strcmp(mode, "env") == 0) return child_env();
+    if (strcmp(mode, "signals") == 0) return child_signals();
     if (strcmp(mode, "where") == 0) return child_where();
     return 99;
 }
@@ -552,6 +579,51 @@ static int test_cwd_session_group(void) {
     return 0;
 }
 
+/* A caller that blocks SIGTERM and SIGUSR1, as for a signalfd, and ignores
+ * SIGPIPE and SIGUSR2: the program inherits none of it, terminate's
+ * SIGTERM ends it on the first rung, and the caller is as it was. */
+static int test_signals_not_handed_on(void) {
+    sigset_t block, before, after;
+    struct sigaction ignore, before_pipe, before_usr2, now;
+    CHECK(sigemptyset(&block) == 0 && sigaddset(&block, SIGTERM) == 0 && sigaddset(&block, SIGUSR1) == 0);
+    CHECK(pthread_sigmask(SIG_BLOCK, &block, &before) == 0);
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    CHECK(sigemptyset(&ignore.sa_mask) == 0);
+    CHECK(sigaction(SIGPIPE, &ignore, &before_pipe) == 0);
+    CHECK(sigaction(SIGUSR2, &ignore, &before_usr2) == 0);
+
+    int out[2];
+    char seen[256];
+    maelys_sys_process_t *process = NULL;
+    CHECK(maelys_sys_pipe_cloexec(out) == MAELYS_SYS_OK);
+    maelys_sys_process_fd_t table[1] = {{out[1], 1}};
+    launch_t launch = {.mode = "signals", .fds = table, .fd_count = 1};
+    CHECK(start(&launch, &process) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_fd_close(&out[1]) == MAELYS_SYS_OK);
+    CHECK(finish(&process, 0) == 0);
+    CHECK(read_all(out[0], seen, sizeof(seen)) == 0);
+    CHECK_SEEN(seen, "blocked: ignored:", " 1 ");
+    CHECK(maelys_sys_fd_close(&out[0]) == MAELYS_SYS_OK);
+
+    CHECK(pthread_sigmask(SIG_SETMASK, NULL, &after) == 0);
+    CHECK(sigismember(&after, SIGTERM) == 1 && sigismember(&after, SIGUSR1) == 1);
+    CHECK(sigaction(SIGPIPE, NULL, &now) == 0 && now.sa_handler == SIG_IGN);
+    CHECK(sigaction(SIGUSR2, NULL, &now) == 0 && now.sa_handler == SIG_IGN);
+
+    maelys_sys_process_status_t status;
+    launch_t sleeper = {.mode = "sleep", .arguments = {"10000"}};
+    CHECK(start(&sleeper, &process) == MAELYS_SYS_OK);
+    uint64_t began = now_ms();
+    CHECK(maelys_sys_process_terminate(process, 5000, 1000, &status) == MAELYS_SYS_OK);
+    CHECK(status.signaled && status.term_signal == SIGTERM && now_ms() - began < 4000u);
+    CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
+
+    CHECK(sigaction(SIGPIPE, &before_pipe, NULL) == 0 && sigaction(SIGUSR2, &before_usr2, NULL) == 0);
+    CHECK(pthread_sigmask(SIG_SETMASK, &before, NULL) == 0);
+    return 0;
+}
+
 /* A program that sleeps: a bounded wait says so, a signal ends it, and
  * what is reaped is reaped once. */
 static int test_wait_and_signal(void) {
@@ -827,7 +899,7 @@ int main(int argc, char **argv) {
     int before = count_open();
     int failed = test_set_apart() || test_stdio_layout() || test_isolated_layout() || test_table_as_a_whole() ||
         test_refusals() || test_start_refused() || test_environment() ||
-        test_cwd_session_group() || test_wait_and_signal() || test_terminate_ladder() ||
+        test_cwd_session_group() || test_signals_not_handed_on() || test_wait_and_signal() || test_terminate_ladder() ||
         test_terminate_already_ended() || test_exit_fd_in_loop() || test_release_running() ||
         test_identity() || test_foreign_exit_fd() || test_many_beside_threads();
     if (failed) return 1;
@@ -851,6 +923,7 @@ int main(int argc, char **argv) {
     puts("ok - process a missing path is NOT_FOUND, a file not runnable is OS/EACCES, no process left");
     puts("ok - process explicit and inherited environments");
     puts("ok - process cwd, new session, new process group");
+    puts("ok - process what the caller blocks or ignores is not handed on; the caller is as it was");
     puts("ok - process bounded wait, signal, reaped once");
     puts("ok - process terminate ladder: SIGTERM ignored, SIGKILL within the bound");
     puts("ok - process terminate of a program already ended keeps its status");
