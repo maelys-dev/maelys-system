@@ -35,6 +35,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -905,6 +908,89 @@ static int test_fake_keeper(void) {
     return 0;
 }
 
+#if defined(__linux__)
+/* The CPU time of a process in clock ticks, from /proc. */
+static long cpu_ticks(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+    FILE *file = fopen(path, "r");
+    if (!file) return -1;
+    char line[1024];
+    if (!fgets(line, sizeof(line), file)) {
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+    const char *cursor = strrchr(line, ')');
+    if (!cursor) return -1;
+    long utime = 0, stime = 0;
+    /* fields 3 to 15 after the name: state ... utime stime */
+    if (sscanf(cursor + 1, " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %ld %ld", &utime, &stime) != 2) return -1;
+    return utime + stime;
+}
+
+/* A group that cannot be seen empty: the test makes itself the adopter of
+ * the leader's orphans and does not reap the grandchild, whose zombie
+ * keeps X occupied on Linux. The keeper reaches UNCERTAIN, stays idle
+ * while it waits, and ends the group once the zombie is reaped. */
+static int test_uncertain_then_ended(void) {
+    CHECK(prctl(PR_SET_CHILD_SUBREAPER, 1) == 0);
+    char *argv[5];
+    maelys_sys_process_options_t program;
+    program_for(&program, argv, "grand");
+    maelys_sys_owned_options_t options = options_for(&program, 0, 30000);
+    options.observe_ms = 300;
+    options.linger_ms = 10000;
+    maelys_sys_owned_t *owned = NULL;
+    maelys_sys_owned_state_t state;
+    CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_OK);
+    pid_t x = maelys_sys_owned_pid(owned);
+    witness_t witnesses[WITNESSES_MAX];
+    int count = 0;
+    CHECK(gather(witnesses, &count, 2, after_ms(30000)) == 0);
+    pid_t keeper_pid = 0, grandchild = 0;
+    for (int i = 0; i < count; ++i) {
+        if (witnesses[i].pid == x) keeper_pid = witnesses[i].ppid;
+        else grandchild = witnesses[i].pid;
+    }
+    CHECK(keeper_pid > 0 && grandchild > 0);
+    uint32_t stop = 0;
+    CHECK(maelys_sys_owned_stop(owned, 100, &stop) == MAELYS_SYS_OK);
+    uint64_t deadline = after_ms(10000);
+    do {
+        CHECK(maelys_sys_owned_poll(owned, &state) == MAELYS_SYS_OK);
+        if (state.phase == MAELYS_SYS_OWNED_UNCERTAIN) break;
+        sleep_ms(10);
+    } while (now_ms() < deadline);
+    CHECK_PHASE(state, MAELYS_SYS_OWNED_UNCERTAIN);
+    CHECK(state.members_present);
+    CHECK(all_ended_by(witnesses, count, after_ms(1000)));
+    /* idle while uncertain: a second of waiting costs the keeper little */
+    long ticks_before = cpu_ticks(keeper_pid);
+    CHECK(ticks_before >= 0);
+    sleep_ms(1000);
+    long ticks_after = cpu_ticks(keeper_pid);
+    CHECK(ticks_after >= ticks_before);
+    fprintf(stderr, "note: the keeper spent %ld ticks of CPU in a second of UNCERTAIN\n", ticks_after - ticks_before);
+    CHECK(ticks_after - ticks_before < 20);
+    /* the zombie reaped by its adopter, the group is empty, the keeper sees it */
+    CHECK(waitpid(grandchild, NULL, 0) == grandchild);
+    CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
+    CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
+    CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
+    drop_witnesses(witnesses, count);
+    CHECK(prctl(PR_SET_CHILD_SUBREAPER, 0) == 0);
+    /* whatever else was adopted meanwhile is reaped now */
+    while (waitpid(-1, NULL, WNOHANG) > 0) {}
+    return 0;
+}
+#else
+static int test_uncertain_then_ended(void) {
+    fprintf(stderr, "note: the uncertain group needs a subreaper: Linux only, skipped here\n");
+    return 0;
+}
+#endif
+
 /* Starts that succeed and starts that fail, by turns, many times: nothing
  * left open, nobody left behind. A hundred cycles; MAELYS_SYS_OWNED_CYCLES
  * sets another number, a thousand for the campaign. */
@@ -997,10 +1083,10 @@ int main(int argc, char **argv) {
     int before = count_open();
     static int (*const cases[])(void) = {test_stop_leader, test_end_with_leader, test_leader_exits_descendant_stays,
         test_host_killed, test_ignore_term, test_escape_is_outside, test_table_env_cwd, test_signals_default,
-        test_keeper_unresponsive, test_refusals, test_fake_keeper, test_many_cycles};
+        test_keeper_unresponsive, test_refusals, test_fake_keeper, test_uncertain_then_ended, test_many_cycles};
     static const char *const names[] = {"stop_leader", "end_with_leader", "leader_exits_descendant_stays",
         "host_killed", "ignore_term", "escape_is_outside", "table_env_cwd", "signals_default",
-        "keeper_unresponsive", "refusals", "fake_keeper", "many_cycles"};
+        "keeper_unresponsive", "refusals", "fake_keeper", "uncertain_then_ended", "many_cycles"};
     int failed = 0;
     /* MAELYS_SYS_TEST_TIMING set: how long each case took, on stderr */
     const char *timing = getenv("MAELYS_SYS_TEST_TIMING");
@@ -1036,6 +1122,7 @@ int main(int argc, char **argv) {
     puts("ok - owned a stopped keeper is seen unresponsive, then not");
     puts("ok - owned refusals before anything exists; a missing keeper or program starts nothing");
     puts("ok - owned a keeper that is not one: a timeout leaves a handle to follow, an early exit is a loss, another protocol is unsupported");
+    puts("ok - owned a group that cannot be seen empty is UNCERTAIN, idle, then ENDED once its zombie is reaped (Linux; skipped elsewhere)");
     puts("ok - owned a hundred cycles of starts and refused starts: nothing left open, nobody left behind");
     return 0;
 }

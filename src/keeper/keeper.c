@@ -205,6 +205,12 @@ static void send_ack(keeper_t *k, uint32_t seq, int value) {
 static int flush(keeper_t *k) {
     while (k->queue_count && !k->ctl_closed) {
         owned_record_t *head = &k->queue[k->queue_head];
+        if (head->type == OWNED_K_STARTED && k->aborted && k->queue_sent == 0) {
+            /* Abandoned before a byte of it went: not sent at all. */
+            k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
+            --k->queue_count;
+            continue;
+        }
         const uint8_t *bytes = (const uint8_t *)head;
         ssize_t sent = send(k->ctl, bytes + k->queue_sent, OWNED_RECORD_SIZE - k->queue_sent,
 #if defined(MSG_NOSIGNAL)
@@ -223,9 +229,11 @@ static int flush(keeper_t *k) {
         trace("sent type %u, %zd bytes", (unsigned)head->type, sent);
         k->queue_sent += (size_t)sent;
         if (k->queue_sent == OWNED_RECORD_SIZE) {
-            if (head->type == OWNED_K_STARTED) {
+            if (head->type == OWNED_K_STARTED && !k->aborted) {
                 /* The last byte gone: the start is validated and its
-                 * deadline is over. Not before. */
+                 * deadline is over. Not before, and not once the start
+                 * was abandoned: a STARTED begun before the abandon is
+                 * finished for the framing, and validates nothing. */
                 k->started_written = 1;
                 k->start_deadline = 0;
             }
@@ -336,6 +344,9 @@ static void look_at_leader(keeper_t *k, uint64_t now) {
 static void reclaim(keeper_t *k, uint64_t now) {
     if (!k->killed || k->done_queued) return;
     if (!k->leader_reaped) {
+        /* One attempt per turn in RECLAIMING; in UNCERTAIN, one every
+         * hundred milliseconds, which is what next_probe then paces. */
+        if (k->phase == MAELYS_SYS_OWNED_UNCERTAIN && now < k->next_probe) return;
         int raw = 0;
         pid_t got = waitpid(k->x, &raw, WNOHANG);
         if (got == k->x || (got < 0 && errno == ECHILD)) {
@@ -354,15 +365,18 @@ static void reclaim(keeper_t *k, uint64_t now) {
                 record.pid = (int32_t)k->x;
                 enqueue(k, record);
             }
+            k->next_probe = now;
             if (k->phase == MAELYS_SYS_OWNED_RECLAIMING) {
                 k->phase = MAELYS_SYS_OWNED_OBSERVING;
-                k->next_probe = now;
                 send_phase(k);
             }
         } else if (got == 0 && k->phase == MAELYS_SYS_OWNED_RECLAIMING && now >= k->observe_deadline) {
             k->phase = MAELYS_SYS_OWNED_UNCERTAIN;
             k->linger_deadline = now + k->linger_ms;
+            k->next_probe = now + 100u;
             send_phase(k);
+        } else if (got == 0 && k->phase == MAELYS_SYS_OWNED_UNCERTAIN) {
+            k->next_probe = now + 100u;
         }
     }
     if (k->leader_reaped && now >= k->next_probe && k->phase != MAELYS_SYS_OWNED_RECLAIMING) {
@@ -910,8 +924,9 @@ int main(int argc, char **argv) {
             next = earliest(next, earliest(k.next_probe, k.observe_deadline));
             break;
         case MAELYS_SYS_OWNED_UNCERTAIN:
+            /* next_probe paces both the probes and, while the leader is
+             * not reaped, the attempts to reap it */
             next = earliest(next, earliest(k.next_probe, k.linger_deadline));
-            if (!k.leader_reaped) next = earliest(next, now + 100u);
             break;
         default:
             break;

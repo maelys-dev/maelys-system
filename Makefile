@@ -68,9 +68,11 @@ DIRWATCH_FAULT_TEST := $(BUILD)/tests/test_dirwatch_faults
 PROCESS_TEST := $(BUILD)/tests/test_process
 PROCESS_FAULT_TEST := $(BUILD)/tests/test_process_faults
 OWNED_TEST := $(BUILD)/tests/test_owned
+OWNED_FAULT_TEST := $(BUILD)/tests/test_owned_faults
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST) \
-	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST) $(OWNED_TEST)
+	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST) $(OWNED_TEST) \
+	$(OWNED_FAULT_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch process-launch owned-launch
@@ -164,6 +166,7 @@ test: $(TESTS)
 	$(PROCESS_TEST)
 	$(PROCESS_FAULT_TEST)
 	$(OWNED_TEST)
+	$(OWNED_FAULT_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

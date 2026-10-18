@@ -40,6 +40,14 @@
 
 extern char **environ;
 
+/* A step a white-box test may act at; nothing in an ordinary build. */
+#if defined(MAELYS_SYS_OWNED_TESTING)
+static int owned_fault(const char *step);
+#define OWNED_FAULT(step) (owned_fault(step) != 0)
+#else
+#define OWNED_FAULT(step) 0
+#endif
+
 #define ISSUED_KEPT 32u
 
 typedef struct issued {
@@ -749,7 +757,8 @@ maelys_sys_result_t maelys_sys_owned_spawn(
     }
     got = await_record(owned, OWNED_K_STARTED, deadline, &record);
     if (got == 1) {
-        owned->phase = MAELYS_SYS_OWNED_RUNNING;
+        /* STARTED applied by the reader: the phase is RUNNING unless a
+         * later record has already said otherwise. */
         owned->last_beat = now_ms();
         *out_owned = owned;
         return MAELYS_SYS_OK;
@@ -773,11 +782,13 @@ maelys_sys_result_t maelys_sys_owned_spawn(
         return record.type == OWNED_K_EXEC_FAILED && error == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
     }
     if (got == 0) {
-        /* One last look, without waiting: a complete STARTED wins. */
+        /* One last look, without waiting: a complete STARTED wins, and
+         * what came after it stands: the start succeeded, the state is
+         * whatever the keeper said last, a final phase included. */
+        if (OWNED_FAULT("before-last-look")) {}
         (void)drain(owned, now_ms());
         if (owned->started_seen) {
-            owned->phase = MAELYS_SYS_OWNED_RUNNING;
-            owned->last_beat = now_ms();
+            if (!owned->last_beat) owned->last_beat = now_ms();
             *out_owned = owned;
             return MAELYS_SYS_OK;
         }
