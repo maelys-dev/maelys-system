@@ -302,4 +302,28 @@ run_mutant_darwin process-ended-before-registration-unreadable src/process.c \
     'EV_SET(&change, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);' \
     'EV_SET(&change, 1, EVFILT_USER, 0, 0, 0, NULL);'
 
+# Owned process groups (0.14.0): the keeper's reservation and its signals,
+# the host's precondition and its refusal to abandon a living keeper.
+run_mutant owned-keeper-reaps-before-last-signal src/keeper/keeper.c \
+    'if (!k->killed || k->done_queued) return;' 'if (k->done_queued) return;'
+run_mutant owned-keeper-end-with-leader-ignored src/keeper/keeper.c \
+    'if ((k->flags & MAELYS_SYS_OWNED_END_WITH_LEADER) || k->stopping) {' \
+    'if (k->stopping) {'
+run_mutant owned-keeper-grace-outlives-leader src/keeper/keeper.c \
+    'if ((k->flags & MAELYS_SYS_OWNED_END_WITH_LEADER) || k->stopping) {' \
+    'if (k->flags & MAELYS_SYS_OWNED_END_WITH_LEADER) {'
+run_mutant owned-keeper-owner-identity-ignored src/keeper/keeper.c \
+    'if (at_owner >= 0 && fds[at_owner].revents) lose(&k, ESRCH, now);' \
+    'if (at_owner >= 0 && fds[at_owner].revents && 0) lose(&k, ESRCH, now);'
+run_mutant owned-keeper-kills-leader-only src/keeper/keeper.c \
+    'int result = kill(-k->x, SIGKILL);' 'int result = kill(k->x, SIGKILL);'
+run_mutant owned-keeper-heartbeat-silent src/keeper/keeper.c \
+    'enqueue(&k, make_record(OWNED_K_BEAT));' '(void)0;'
+run_mutant owned-host-sigchld-precondition-ignored src/owned.c \
+    'if (current.sa_handler == SIG_IGN || (current.sa_flags & SA_NOCLDWAIT)) return MAELYS_SYS_ERR_STATE;' \
+    'if (0) return MAELYS_SYS_ERR_STATE;'
+run_mutant owned-host-release-abandons-a-living-keeper src/owned.c \
+    'if (!handle->state.keeper_reaped) return MAELYS_SYS_ERR_STATE;' \
+    'if (0) return MAELYS_SYS_ERR_STATE;'
+
 printf '%s\n' "mutation check: $killed/$killed killed"

@@ -30,6 +30,7 @@
 #endif
 
 #include "maelys/sys/process.h"
+#include "process_internal.h"
 
 #include "maelys/sys/clock.h"
 #include "maelys/sys/fd.h"
@@ -119,7 +120,7 @@ static maelys_sys_result_t start_failure(int error) {
     return error == ENOENT ? MAELYS_SYS_ERR_NOT_FOUND : MAELYS_SYS_ERR_OS;
 }
 
-static void fill_status(maelys_sys_process_status_t *status, int raw) {
+void maelys_sys__process_status_fill(maelys_sys_process_status_t *status, int raw) {
     memset(status, 0, sizeof(*status));
     if (WIFEXITED(raw)) {
         status->exited = 1;
@@ -136,7 +137,7 @@ static int reap_now(maelys_sys_process_t *process) {
         int raw = 0;
         pid_t got = waitpid(process->pid, &raw, WNOHANG);
         if (got == process->pid) {
-            fill_status(&process->status, raw);
+            maelys_sys__process_status_fill(&process->status, raw);
             atomic_store_explicit(&process->reaped, 1, memory_order_release);
             return 1;
         }
@@ -230,10 +231,10 @@ static void run_child(
     /* The report pipe goes above the targets too, or a target could take
      * its number and the failure of this exec would never be heard. */
     int report = fcntl(report_fd, F_DUPFD_CLOEXEC, table->base);
-    if (report < 0) error = errno;
+    if (report < 0) error = errno ? errno : EBADF;
     for (size_t index = 0; !error && index < table->count; ++index) {
         staged[index] = fcntl(table->source[index], F_DUPFD_CLOEXEC, table->base);
-        if (staged[index] < 0) error = errno;
+        if (staged[index] < 0) error = errno ? errno : EBADF;
     }
     if (!error && mark_all_cloexec(limit) != 0) error = errno;
     for (size_t index = 0; !error && index < table->count; ++index) {
@@ -264,7 +265,8 @@ static void run_child(
 static maelys_sys_result_t start_program(
     const maelys_sys_process_options_t *options,
     const staged_table_t *table,
-    pid_t *out_pid) {
+    pid_t *out_pid,
+    int *out_report_fd) {
     int report[2] = {-1, -1};
     if (PROCESS_FAULT("pipe") || pipe2(report, O_CLOEXEC) != 0) return MAELYS_SYS_ERR_OS;
     struct rlimit limit;
@@ -294,20 +296,9 @@ static maelys_sys_result_t start_program(
         return MAELYS_SYS_ERR_OS;
     }
     (void)close(report[1]);
-    int error = 0;
-    ssize_t got;
-    do {
-        got = read(report[0], &error, sizeof(error));
-    } while (got < 0 && errno == EINTR);
-    (void)close(report[0]);
-    if (got == 0) {
-        *out_pid = pid;
-        return MAELYS_SYS_OK;
-    }
-    /* The child ended right after writing: this reap cannot wait long. */
-    int raw = 0;
-    while (waitpid(pid, &raw, 0) < 0 && errno == EINTR) {}
-    return start_failure(got == (ssize_t)sizeof(error) ? error : EIO);
+    *out_pid = pid;
+    *out_report_fd = report[0];
+    return MAELYS_SYS_OK;
 }
 
 static int open_exit_fd(pid_t pid) {
@@ -325,9 +316,11 @@ static int open_exit_fd(pid_t pid) {
 static maelys_sys_result_t start_program(
     const maelys_sys_process_options_t *options,
     const staged_table_t *table,
-    pid_t *out_pid) {
+    pid_t *out_pid,
+    int *out_report_fd) {
     int staged[MAELYS_SYS_PROCESS_MAX_FDS];
     size_t made = 0;
+    *out_report_fd = -1;
     int error = 0;
     for (; made < table->count; ++made) {
         staged[made] = fcntl(table->source[made], F_DUPFD_CLOEXEC, table->base);
@@ -433,6 +426,36 @@ static int open_exit_fd(pid_t pid) {
 
 #endif
 
+maelys_sys_result_t maelys_sys__process_start(
+    const maelys_sys_process_options_t *options,
+    pid_t *out_pid,
+    int *out_report_fd) {
+    if (out_report_fd) *out_report_fd = -1;
+    if (!out_pid || !out_report_fd) return MAELYS_SYS_ERR_ARGUMENT;
+    staged_table_t table;
+    maelys_sys_result_t checked = check_options(options, &table);
+    if (checked != MAELYS_SYS_OK) return checked;
+    return start_program(options, &table, out_pid, out_report_fd);
+}
+
+maelys_sys_result_t maelys_sys__process_await_exec(pid_t pid, int report_fd) {
+    int error = 0;
+    ssize_t got;
+    do {
+        got = read(report_fd, &error, sizeof(error));
+    } while (got < 0 && errno == EINTR);
+    (void)close(report_fd);
+    if (got == 0) return MAELYS_SYS_OK;
+    /* The child ended right after writing: this reap cannot wait long. */
+    int raw = 0;
+    while (waitpid(pid, &raw, 0) < 0 && errno == EINTR) {}
+    return start_failure(got == (ssize_t)sizeof(error) ? error : EIO);
+}
+
+int maelys_sys__process_exit_fd_open(pid_t pid) {
+    return open_exit_fd(pid);
+}
+
 maelys_sys_result_t maelys_sys_process_spawn(
     const maelys_sys_process_options_t *options,
     maelys_sys_process_t **out_process) {
@@ -443,7 +466,11 @@ maelys_sys_result_t maelys_sys_process_spawn(
     if (checked != MAELYS_SYS_OK) return checked;
     maelys_sys_process_t *process = calloc(1, sizeof(*process));
     if (!process) return MAELYS_SYS_ERR_MEMORY;
-    maelys_sys_result_t started = start_program(options, &table, &process->pid);
+    int report_fd = -1;
+    maelys_sys_result_t started = start_program(options, &table, &process->pid, &report_fd);
+    if (started == MAELYS_SYS_OK && report_fd >= 0) {
+        started = maelys_sys__process_await_exec(process->pid, report_fd);
+    }
     if (started != MAELYS_SYS_OK) {
         int saved = errno;
         free(process);

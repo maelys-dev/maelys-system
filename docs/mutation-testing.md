@@ -1,7 +1,7 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies eighty-four one-line faults, seventeen of them on Linux only
+directories, applies ninety-two one-line faults, seventeen of them on Linux only
 and fourteen on macOS only, and
 requires the existing tests to reject every mutant. Thirteen target the
 reactor, the last four its fairness between timers and descriptors (0.12.3):
@@ -111,3 +111,15 @@ changed implementation must update anchors and preserve or strengthen the
 fault set. Surviving mutants fail the gate; a missing mutation anchor also
 fails it. The harness targets load-bearing invariants and is not a substitute
 for a general mutation-testing tool.
+
+## Owned process groups (0.14.0)
+
+Eight faults on the keeper and its host, each rejected by
+`tests/test_owned.c`: the leader reaped before the last signal to the
+group, which frees the group's number while descendants remain;
+`END_WITH_LEADER` ignored; a grace that outlives the leader; the owner's
+identity not watched, so that a copy of the life pipe held elsewhere keeps
+the group alive after the host's death; SIGKILL to the leader alone instead
+of the group; a keeper that never beats; a host that starts under a SIGCHLD
+disposition the kernel reaps by; a release that abandons a living keeper.
+

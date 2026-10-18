@@ -34,4 +34,14 @@ test "$("$examples_dir/process-launch" 5000 /bin/sh -c 'echo hello; echo there >
 out: there
 ended: exit 4"
 test "$("$examples_dir/process-launch" 400 /bin/sh -c 'trap "" TERM; exec sleep 30')" = "stopped: signal 9"
+
+# owned-launch: the same two programs as the leaders of owned groups,
+# through the keeper built beside the examples; the group ends with them.
+keeper="$(CDPATH='' cd -- "$examples_dir/../libexec/maelys-sys" && pwd)/keeper"
+test "$("$examples_dir/owned-launch" "$keeper" 5000 /bin/sh -c 'echo hello; echo there >&2; exit 4')" = "out: hello
+out: there
+ended: exit 4
+group: ended"
+test "$("$examples_dir/owned-launch" "$keeper" 400 /bin/sh -c 'trap "" TERM; exec sleep 30')" = "stopped: signal 9
+group: ended"
 printf '%s\n' "examples check: ok"

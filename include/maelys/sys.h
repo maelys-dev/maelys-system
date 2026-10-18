@@ -13,5 +13,6 @@
 #include "maelys/sys/thread.h"
 #include "maelys/sys/loop.h"
 #include "maelys/sys/process.h"
+#include "maelys/sys/owned.h"
 
 #endif

@@ -70,6 +70,7 @@ deb_name="libmaelys-sys-dev_${version}_${deb_arch}.deb"
 dpkg-deb --root-owner-group --build "$deb_root" "dist/$deb_name" >/dev/null
 dpkg-deb --info "dist/$deb_name" >/dev/null
 dpkg-deb --contents "dist/$deb_name" | grep -Fq './usr/lib/libmaelys_sys.a'
+dpkg-deb --contents "dist/$deb_name" | grep -Fq './usr/libexec/maelys-sys/keeper'
 
 rpm_top="$work/rpmbuild"
 mkdir -p "$rpm_top/BUILD" "$rpm_top/BUILDROOT" "$rpm_top/RPMS" \
@@ -98,6 +99,7 @@ cp -a $linux_stage/. %{buildroot}/
 /usr/include/maelys/sys/
 /usr/lib/libmaelys_sys.a
 /usr/lib/pkgconfig/maelys-sys.pc
+/usr/libexec/maelys-sys/
 EOF
 rpmbuild --define "_topdir $rpm_top" -bb \
     "$rpm_top/SPECS/maelys-system.spec" >/dev/null

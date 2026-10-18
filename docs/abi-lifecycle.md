@@ -22,9 +22,10 @@ An incompatible public-header or observable-contract change requires all of:
 Public structures the library reads (`maelys_sys_socket_bind_options_t`,
 `maelys_sys_publish_options_t`, `maelys_sys_file_lock_options_t`,
 `maelys_sys_file_expectations_t`, `maelys_sys_file_identity_t`,
-`maelys_sys_process_options_t`, `maelys_sys_process_fd_t`) and the ones
+`maelys_sys_process_options_t`, `maelys_sys_process_fd_t`,
+`maelys_sys_owned_options_t`) and the ones
 it fills (`maelys_sys_dirwatch_change_t`, `maelys_sys_process_status_t`,
-`maelys_sys_process_identity_t`) keep their
+`maelys_sys_process_identity_t`, `maelys_sys_owned_state_t`) keep their
 fields within ABI 1: a new option is a new structure and a new function,
 never a field added to an existing one. A consumer compiled against an
 older header therefore never passes a shorter object. Result codes are
@@ -43,6 +44,17 @@ renaming it, or merging it into another object, is an ABI event. `make
 check` and `make install-check` read the member from the built and from the
 installed archive, refuse any undefined symbol of the library or of the
 thread runtime, and link a round trip against it alone.
+
+The keeper of owned process groups (0.14.0) is an executable installed at
+`libexec/maelys-sys/keeper` under the prefix, named by its absolute path by
+the host; the library carries the path of its own prefix, indicative only.
+Its path under the prefix and the protocol it speaks with the library are
+part of ABI 1: a keeper of a later release accepts every protocol a library
+of ABI 1 speaks, so that a consumer linked statically against an older
+library works with a newer installed keeper; a library refuses an older
+keeper with `ERR_UNSUPPORTED` before anything starts. A consumer that
+distributes its own binary and calls `maelys_sys_owned_spawn` ships the
+keeper beside it; a consumer of `fdpass.o` alone does not.
 
 Private structure layout, backend implementation and test-only code are not
 ABI. Native descriptor integers are part of the explicitly POSIX contract.

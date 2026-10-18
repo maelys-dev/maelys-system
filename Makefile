@@ -39,9 +39,17 @@ PLATFORM_SOURCE := src/loop_kqueue.c
 endif
 SOURCES := src/result.c src/clock.c src/fd.c src/fdpass.c src/file.c src/socket.c \
 	src/wakeup.c src/thread.c src/loop.c src/loop_poll.c src/dirwatch.c src/process.c \
-	$(PLATFORM_SOURCE)
+	src/owned.c $(PLATFORM_SOURCE)
+KEEPER_SOURCE := src/keeper/keeper.c
+ANALYZE_SOURCES := $(SOURCES) $(KEEPER_SOURCE)
 OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES))
 LIB := $(BUILD)/lib/libmaelys_sys.a
+# The keeper of owned process groups: installed under libexec, named by
+# its absolute path by the host. The library carries the path it expects,
+# which follows PREFIX at the time of the build: install rebuilds it.
+KEEPER := $(BUILD)/libexec/maelys-sys/keeper
+KEEPER_PATH := $(PREFIX)/libexec/maelys-sys/keeper
+KEEPER_PATH_STAMP := $(BUILD)/keeper-path
 TEST := $(BUILD)/tests/test_sys
 CONSUMER_TEST := $(BUILD)/tests/test_consumers
 STRESS_TEST := $(BUILD)/tests/test_stress
@@ -59,23 +67,38 @@ DIRWATCH_TEST := $(BUILD)/tests/test_dirwatch
 DIRWATCH_FAULT_TEST := $(BUILD)/tests/test_dirwatch_faults
 PROCESS_TEST := $(BUILD)/tests/test_process
 PROCESS_FAULT_TEST := $(BUILD)/tests/test_process_faults
+OWNED_TEST := $(BUILD)/tests/test_owned
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST) \
-	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST)
+	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST) $(OWNED_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
-EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch process-launch
+EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch process-launch owned-launch
 EXAMPLES := $(addprefix $(BUILD)/examples/,$(EXAMPLE_NAMES))
 BENCHMARK := $(BUILD)/benchmarks/reactor-maelys
 
-.PHONY: all check test tests stress fault-check consumer-check clean header-check \
+.PHONY: all check test tests force stress fault-check consumer-check clean header-check \
 	check-version include-precedence-check fdpass-standalone-check audit asan ubsan \
 	asan-ubsan tsan analyze \
 	install release-check \
 	install-check uninstall dist examples examples-check benchmark \
 	mutation-check package-release package-linux
 
-all: $(LIB)
+all: $(LIB) $(KEEPER)
+
+force:
+
+$(KEEPER_PATH_STAMP): force
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(KEEPER_PATH)' > $@.new; \
+	if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+
+$(BUILD)/src/owned.o: $(KEEPER_PATH_STAMP)
+$(BUILD)/src/owned.o: CPPFLAGS += -DMAELYS_SYS_KEEPER_PATH='"$(KEEPER_PATH)"'
+
+$(KEEPER): $(KEEPER_SOURCE) $(LIB)
+	@mkdir -p $(@D)
+	$(CC) $(COMMON_CPPFLAGS) -Isrc $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(@D)
@@ -86,6 +109,8 @@ $(BUILD)/%.o: %.c
 $(LIB): $(OBJECTS)
 	@mkdir -p $(@D)
 	$(AR) rcs $@ $^
+
+$(OWNED_TEST): $(KEEPER)
 
 $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 	@mkdir -p $(@D)
@@ -138,6 +163,7 @@ test: $(TESTS)
 	$(DIRWATCH_FAULT_TEST)
 	$(PROCESS_TEST)
 	$(PROCESS_FAULT_TEST)
+	$(OWNED_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)
@@ -162,7 +188,7 @@ audit:
 
 examples: $(EXAMPLES)
 
-examples-check: examples
+examples-check: examples $(KEEPER)
 	./scripts/examples-check.sh $(BUILD)/examples
 
 mutation-check:
@@ -218,16 +244,17 @@ analyze:
 		grep -q '^ *unix\.BlockInCriticalSection'; then \
 		disable='-Xanalyzer -analyzer-disable-checker -Xanalyzer unix.BlockInCriticalSection'; \
 	fi; \
-	for source in $(SOURCES); do \
+	for source in $(ANALYZE_SOURCES); do \
 		$(CC) --analyze -Xanalyzer -analyzer-output=text \
 			-Xanalyzer -analyzer-werror $$disable \
-			$(COMMON_CPPFLAGS) $(CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
+			$(COMMON_CPPFLAGS) -Isrc $(CPPFLAGS) -std=c11 -pthread $$source || exit 1; \
 	done
 
-install: $(LIB) $(PC)
+install: $(LIB) $(KEEPER) $(PC)
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/maelys/sys \
-		$(DESTDIR)$(PREFIX)/lib/pkgconfig
+		$(DESTDIR)$(PREFIX)/lib/pkgconfig $(DESTDIR)$(PREFIX)/libexec/maelys-sys
 	install -m 0644 $(LIB) $(DESTDIR)$(PREFIX)/lib/libmaelys_sys.a
+	install -m 0755 $(KEEPER) $(DESTDIR)$(PREFIX)/libexec/maelys-sys/keeper
 	install -m 0644 include/maelys/sys.h $(DESTDIR)$(PREFIX)/include/maelys/sys.h
 	install -m 0644 include/maelys/sys/*.h $(DESTDIR)$(PREFIX)/include/maelys/sys/
 	install -m 0644 $(PC) $(DESTDIR)$(PREFIX)/lib/pkgconfig/maelys-sys.pc
@@ -237,9 +264,11 @@ install-check: all
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/lib/libmaelys_sys.a \
+		$(DESTDIR)$(PREFIX)/libexec/maelys-sys/keeper \
 		$(DESTDIR)$(PREFIX)/include/maelys/sys.h \
 		$(DESTDIR)$(PREFIX)/lib/pkgconfig/maelys-sys.pc
 	rm -rf $(DESTDIR)$(PREFIX)/include/maelys/sys
+	rmdir $(DESTDIR)$(PREFIX)/libexec/maelys-sys 2>/dev/null || true
 
 dist: check
 	@mkdir -p dist
