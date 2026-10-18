@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -316,10 +317,15 @@ static int test_socket_unix_backlog(void) {
     size_t written = 0;
     int refused = 0;
 
+    /* Under TMPDIR: a build sandbox, Homebrew's among them, refuses a
+     * connection to a Unix socket outside its own temporary directory. */
+    const char *base = getenv("TMPDIR");
+    if (!base || base[0] != '/') base = "/tmp";
     memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
-    snprintf(address.sun_path, sizeof(address.sun_path),
-        "/tmp/maelys-sys-test-%ld.sock", (long)getpid());
+    int length = snprintf(address.sun_path, sizeof(address.sun_path),
+        "%s/maelys-sys-test-%ld.sock", base, (long)getpid());
+    ASSERT_TRUE(length > 0 && (size_t)length < sizeof(address.sun_path));
     (void)unlink(address.sun_path);
     ASSERT_TRUE(maelys_sys_socket_create(
         AF_UNIX, SOCK_STREAM, 0, &listener) == MAELYS_SYS_OK);
