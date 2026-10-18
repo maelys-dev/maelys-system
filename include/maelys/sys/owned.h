@@ -64,8 +64,9 @@
  * pipes and names their ends in the program's table, 29 entries at most:
  * the keeper takes three.
  *
- * A handle belongs to one thread, except owned_pid, owned_result and the
- * two descriptors, which any thread may read while the handle lives.
+ * A handle belongs to one thread, except owned_pid and the two
+ * descriptors, which any thread may read while the handle lives;
+ * owned_result reads what poll writes and belongs to that thread.
  */
 
 #include <stddef.h>
@@ -187,9 +188,11 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_poll(
  * Asks the keeper to send signo to the leader, or to the group when
  * to_group is set. Never blocks: the request is written, or kept to be
  * written by poll and wait when the channel admits it, and *out_seq
- * names it for owned_result. ERR_WOULD_BLOCK when sixteen requests
- * already wait: nothing is engaged. ERR_STATE once the handle is final,
- * or when the sequence numbers kept for signals are spent.
+ * names it for owned_result. ERR_WOULD_BLOCK when sixteen requests are
+ * still unanswered: nothing is engaged, and the limit is what keeps
+ * every answer from being lost or evicted before it is read. ERR_STATE
+ * once the handle is final, or when the sequence numbers kept for
+ * signals are spent.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_signal(
     maelys_sys_owned_t *owned,
@@ -214,7 +217,9 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_stop(
  * or errno; ESRCH for a signal asked after the leader was reaped),
  * ERR_WOULD_BLOCK while the answer has not come, ERR_NOT_FOUND for a
  * sequence that was never issued or whose answer has been evicted (the
- * last sixteen are kept).
+ * last sixteen are kept). The keeper runs a request only once it has
+ * room for its answer, so an answer is never lost to a full channel:
+ * it waits. Same thread as poll.
  */
 MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_result(
     const maelys_sys_owned_t *owned,

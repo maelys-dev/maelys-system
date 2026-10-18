@@ -223,7 +223,12 @@ static int flush(keeper_t *k) {
         trace("sent type %u, %zd bytes", (unsigned)head->type, sent);
         k->queue_sent += (size_t)sent;
         if (k->queue_sent == OWNED_RECORD_SIZE) {
-            if (head->type == OWNED_K_STARTED) k->started_written = 1;
+            if (head->type == OWNED_K_STARTED) {
+                /* The last byte gone: the start is validated and its
+                 * deadline is over. Not before. */
+                k->started_written = 1;
+                k->start_deadline = 0;
+            }
             if (head->type == OWNED_K_DONE) k->done_queued = 2;
             k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
             --k->queue_count;
@@ -360,7 +365,7 @@ static void reclaim(keeper_t *k, uint64_t now) {
             send_phase(k);
         }
     }
-    if (k->leader_reaped && now >= k->next_probe) {
+    if (k->leader_reaped && now >= k->next_probe && k->phase != MAELYS_SYS_OWNED_RECLAIMING) {
         errno = 0;
         int probe = kill(-k->x, 0);
         if (probe != 0 && errno == ESRCH) {
@@ -679,7 +684,22 @@ static void read_control(keeper_t *k, uint64_t now) {
         }
         /* The room left is written so that a fortified read can see it
          * is bounded by the record. */
-        size_t at = k->rlen % OWNED_RECORD_SIZE;
+        size_t at = k->rlen < OWNED_RECORD_SIZE ? k->rlen : 0u;
+        if (k->rlen == OWNED_RECORD_SIZE) {
+            /* A whole request, kept until its answer has a place in the
+             * queue: a request is never run without room for its ACK and
+             * the PHASE that may follow. Until then nothing more is read. */
+            if (k->queue_count + 2u > QUEUE_SIZE) return;
+            k->rlen = 0;
+            owned_record_t record;
+            memcpy(&record, k->rbuf, sizeof(record));
+            if (record.magic != OWNED_MAGIC || record.protocol != OWNED_PROTOCOL) {
+                k->ctl_closed = 1;
+                return;
+            }
+            handle_request(k, &record, now);
+            continue;
+        }
         ssize_t got = read(k->ctl, k->rbuf + at, OWNED_RECORD_SIZE - at);
         if (got < 0) {
             if (errno == EINTR) continue;
@@ -692,17 +712,6 @@ static void read_control(keeper_t *k, uint64_t now) {
             return;
         }
         k->rlen = at + (size_t)got;
-        if (k->rlen < OWNED_RECORD_SIZE) continue;
-        k->rlen = 0;
-        owned_record_t record;
-        memcpy(&record, k->rbuf, sizeof(record));
-        if (record.magic != OWNED_MAGIC || record.protocol != OWNED_PROTOCOL) {
-            k->ctl_closed = 1;
-            return;
-        }
-        handle_request(k, &record, now);
-        /* No more than sixteen answers in flight: the rest waits unread. */
-        if (k->queue_count >= QUEUE_SIZE - 1u) return;
     }
 }
 
@@ -819,16 +828,14 @@ int main(int argc, char **argv) {
     for (;;) {
         now = now_ms();
         /* deadlines */
-        if (!k.started_written && !k.aborted && !k.owner_lost && k.start_deadline && now >= k.start_deadline &&
-            k.phase != MAELYS_SYS_OWNED_RUNNING) {
-            /* Not validated in time: what exists is stopped, nothing more
-             * is started. NOT_STARTED says unvalidated, not unrun. */
+        if (!k.started_written && !k.aborted && !k.owner_lost && k.start_deadline && now >= k.start_deadline) {
+            /* Not validated in time, STARTED queued but not fully written
+             * included: what exists is stopped, nothing more is started.
+             * NOT_STARTED says unvalidated, not unrun. */
             k.aborted = 1;
+            k.start_deadline = 0;
             if (k.x_created && !k.killed) kill_group(&k, now);
             else if (!k.x_created) finish(&k, MAELYS_SYS_OWNED_START_FAILED, now);
-        }
-        if (k.phase == MAELYS_SYS_OWNED_RUNNING && !k.started_written && k.queue_count == 0) {
-            k.started_written = 1; /* STARTED left before this turn */
         }
         if (k.stopping && k.phase == MAELYS_SYS_OWNED_STOPPING && k.grace_deadline && now >= k.grace_deadline) {
             kill_group(&k, now);
@@ -855,9 +862,10 @@ int main(int argc, char **argv) {
         int count = 0;
         int at_ctl = -1, at_life = -1, at_owner = -1, at_sig = -1, at_report = -1;
         if (!k.ctl_closed) {
+            int held = k.rlen == OWNED_RECORD_SIZE && k.queue_count + 2u > QUEUE_SIZE;
             at_ctl = count;
             fds[count].fd = k.ctl;
-            fds[count].events = (short)(POLLIN | (k.queue_count ? POLLOUT : 0));
+            fds[count].events = (short)((held ? 0 : POLLIN) | (k.queue_count ? POLLOUT : 0));
             fds[count].revents = 0;
             ++count;
         }
@@ -887,12 +895,27 @@ int main(int argc, char **argv) {
             fds[count].revents = 0;
             ++count;
         }
+        /* The deadlines of the phase at hand, and no other: a passed one
+         * that no longer matters would make poll return at once. */
         uint64_t next = 0;
         if (!k.started_written && !k.aborted) next = earliest(next, k.start_deadline);
-        if (k.phase == MAELYS_SYS_OWNED_STOPPING) next = earliest(next, k.grace_deadline);
-        if (k.killed && !k.leader_reaped) next = earliest(next, earliest(k.observe_deadline, now + 10u));
-        if (k.killed && k.leader_reaped) next = earliest(next, earliest(k.next_probe, k.observe_deadline));
-        if (k.phase == MAELYS_SYS_OWNED_UNCERTAIN) next = earliest(next, k.linger_deadline);
+        switch (k.phase) {
+        case MAELYS_SYS_OWNED_STOPPING:
+            next = earliest(next, k.grace_deadline);
+            break;
+        case MAELYS_SYS_OWNED_RECLAIMING:
+            next = earliest(next, earliest(k.observe_deadline, now + 10u));
+            break;
+        case MAELYS_SYS_OWNED_OBSERVING:
+            next = earliest(next, earliest(k.next_probe, k.observe_deadline));
+            break;
+        case MAELYS_SYS_OWNED_UNCERTAIN:
+            next = earliest(next, earliest(k.next_probe, k.linger_deadline));
+            if (!k.leader_reaped) next = earliest(next, now + 100u);
+            break;
+        default:
+            break;
+        }
         if (k.next_beat && !k.killed) next = earliest(next, k.next_beat);
         if (k.done_queued) next = earliest(next, k.done_deadline);
         int timeout = -1;

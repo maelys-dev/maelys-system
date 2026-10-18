@@ -64,6 +64,10 @@ static int listener = -1;
  * before the test does: its keeper then ends its group. */
 static pid_t pending_host;
 
+/* A beat: one byte of kind, then the monotonic time of its production,
+ * so that the test dates the work when it was done, not when it was read. */
+#define BEAT_SIZE 9u
+
 /* A witness as the test sees it. */
 typedef struct witness {
     int fd;
@@ -71,7 +75,10 @@ typedef struct witness {
     pid_t pid, ppid, pgid;
     maelys_sys_process_identity_t identity;
     int exit_fd;         /* readable once the process has ended, from outside */
-    uint64_t last_beat;  /* when its last beat arrived */
+    uint64_t last_beat;  /* when its last beat was produced, by its own clock */
+    int usr1_beats;      /* beats that said SIGUSR1 was taken */
+    unsigned char carry[BEAT_SIZE];
+    size_t carried;
     int closed;
 } witness_t;
 
@@ -104,8 +111,8 @@ static int count_open(void) {
 
 /* --- what the child does, by mode ----------------------------------- */
 
-static void say(int fd, const char *text) {
-    size_t length = strlen(text);
+static void say_bytes(int fd, const void *bytes, size_t length) {
+    const char *text = bytes;
     while (length) {
         ssize_t written = write(fd, text, length);
         if (written < 0 && errno == EINTR) continue;
@@ -113,6 +120,10 @@ static void say(int fd, const char *text) {
         text += written;
         length -= (size_t)written;
     }
+}
+
+static void say(int fd, const char *text) {
+    say_bytes(fd, text, strlen(text));
 }
 
 /* Connects to the test and announces itself. -1 when the test is gone. */
@@ -141,9 +152,12 @@ static void on_usr1(int number) { (void)number; usr1_seen = 1; }
 static void beat_until_stopped(int fd) {
     uint64_t end = now_ms() + 60000u;
     while (now_ms() < end) {
-        char byte = usr1_seen ? 'u' : 'b';
+        unsigned char beat[BEAT_SIZE];
+        beat[0] = usr1_seen ? 'u' : 'b';
         usr1_seen = 0;
-        ssize_t written = write(fd, &byte, 1);
+        uint64_t produced = now_ms();
+        memcpy(beat + 1, &produced, sizeof(produced));
+        ssize_t written = write(fd, beat, sizeof(beat));
         if (written < 0 && errno != EINTR && errno != EAGAIN) break;
         struct pollfd ready = {fd, POLLIN, 0};
         if (poll(&ready, 1, 20) > 0) {
@@ -237,12 +251,41 @@ static int run_host(int argc, char **argv) {
     for (;;) pause();
 }
 
-/* The keeper that is not one: what the host sees of a wrong path. */
+/* The keeper that is not one: this test as the keeper says nothing and
+ * leaves after a second. The keeper's environment is the library's, not
+ * the test's, so the other fakes are shell scripts written by the test. */
 static int run_fake_keeper(void) {
-    const char *how = getenv("OWNED_FAKE");
-    if (how && strcmp(how, "exit70") == 0) return 70;
     sleep_ms(1000);
     return 0;
+}
+
+static char fake_exit70[sizeof(root) + 16];
+static char fake_hello99[sizeof(root) + 16];
+
+static int write_script(const char *path, const char *text) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0700);
+    CHECK(fd >= 0);
+    say(fd, text);
+    CHECK(close(fd) == 0);
+    return 0;
+}
+
+/* exit70 leaves at once with a code that is no terminal state. hello99
+ * writes one record on the control, 4: magic "MSOW" (57 4f 53 4d),
+ * protocol 99, type 1 (HELLO), and 99 again as the protocol it names at
+ * offset 20; then it waits for the end of the life pipe, 3. */
+static int write_fakes(void) {
+    snprintf(fake_exit70, sizeof(fake_exit70), "%s/exit70.sh", root);
+    snprintf(fake_hello99, sizeof(fake_hello99), "%s/hello99.sh", root);
+    if (write_script(fake_exit70, "#!/bin/sh\nexit 70\n")) return 1;
+    return write_script(fake_hello99,
+        "#!/bin/sh\n"
+        "printf 'WOSM\\143\\000\\001\\000' >&4\n"
+        "i=0; while [ $i -lt 12 ]; do printf '\\000' >&4; i=$((i + 1)); done\n"
+        "printf '\\143\\000\\000\\000' >&4\n"
+        "i=0; while [ $i -lt 40 ]; do printf '\\000' >&4; i=$((i + 1)); done\n"
+        "cat <&3 >/dev/null\n"
+        "exit 0\n");
 }
 
 /* --- the witnesses' side of the test ---------------------------------- */
@@ -317,7 +360,15 @@ static void take_beats(witness_t *witnesses, int count) {
                 w->closed = 1;
                 break;
             }
-            w->last_beat = now_ms();
+            for (ssize_t j = 0; j < got; ++j) {
+                w->carry[w->carried++] = (unsigned char)buffer[j];
+                if (w->carried < BEAT_SIZE) continue;
+                w->carried = 0;
+                uint64_t produced = 0;
+                memcpy(&produced, w->carry + 1, sizeof(produced));
+                if (produced > w->last_beat) w->last_beat = produced;
+                if (w->carry[0] == 'u') ++w->usr1_beats;
+            }
         }
     }
 }
@@ -411,6 +462,43 @@ static int test_stop_leader(void) {
     }
     CHECK(maelys_sys_owned_result(owned, seq, &result) == MAELYS_SYS_OK && result == 0);
     CHECK(maelys_sys_owned_result(owned, seq + 100u, &result) == MAELYS_SYS_ERR_NOT_FOUND);
+    deadline = after_ms(5000);
+    do {
+        take_beats(witnesses, count);
+        if (witnesses[0].usr1_beats) break;
+        sleep_ms(5);
+    } while (now_ms() < deadline);
+    CHECK(witnesses[0].usr1_beats >= 1);
+    /* Saturation: the keeper stopped so that no answer can come, requests
+     * issued until the handle refuses, five rounds; exactly sixteen are
+     * accepted each time, and once the keeper runs again every one of
+     * them has its answer, none lost. The test stops the keeper by its
+     * number as a test does, which a host never does. */
+    pid_t keeper_pid = witnesses[0].ppid;
+    for (int round = 0; round < 5; ++round) {
+        CHECK(kill(keeper_pid, SIGSTOP) == 0);
+        uint32_t issued[64];
+        int count_issued = 0;
+        maelys_sys_result_t asked = MAELYS_SYS_OK;
+        for (int i = 0; i < 64 && asked == MAELYS_SYS_OK; ++i) {
+            asked = maelys_sys_owned_signal(owned, SIGUSR1, 1, &issued[count_issued]);
+            if (asked == MAELYS_SYS_OK) ++count_issued;
+        }
+        CHECK(asked == MAELYS_SYS_ERR_WOULD_BLOCK && count_issued == 16);
+        CHECK(kill(keeper_pid, SIGCONT) == 0);
+        deadline = after_ms(5000);
+        int answered = 0;
+        do {
+            (void)maelys_sys_owned_poll(owned, &state);
+            answered = 0;
+            for (int i = 0; i < count_issued; ++i) {
+                if (maelys_sys_owned_result(owned, issued[i], &result) == MAELYS_SYS_OK && result == 0) ++answered;
+            }
+            if (answered == count_issued) break;
+            sleep_ms(2);
+        } while (now_ms() < deadline);
+        CHECK(answered == count_issued);
+    }
     /* release refuses while the group lives */
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_ERR_STATE && owned);
     uint32_t stop = 0, again = 0;
@@ -540,9 +628,15 @@ static int test_host_killed(void) {
     /* two seconds is the bound of this validation, not a promise */
     CHECK(all_ended_by(witnesses, count, killed + 2000));
     uint64_t ended_at = now_ms();
-    for (int i = 0; i < count; ++i) CHECK(witnesses[i].last_beat <= ended_at);
-    fprintf(stderr, "note: owner killed, %d witnesses ended within %llu ms\n", count,
-        (unsigned long long)(ended_at - killed));
+    uint64_t last_work = 0;
+    for (int i = 0; i < count; ++i) {
+        CHECK(witnesses[i].last_beat <= ended_at);
+        if (witnesses[i].last_beat > last_work) last_work = witnesses[i].last_beat;
+    }
+    /* the beats are dated by their producers: no work after the bound */
+    CHECK(last_work <= killed + 2000);
+    fprintf(stderr, "note: owner killed, %d witnesses ended within %llu ms; last beat produced %lld ms after the kill\n",
+        count, (unsigned long long)(ended_at - killed), (long long)last_work - (long long)killed);
     /* the keeper leaves once the group is empty */
     struct pollfd ready = {keeper_exit, POLLIN, 0};
     CHECK(poll(&ready, 1, 5000) > 0);
@@ -789,7 +883,6 @@ static int test_fake_keeper(void) {
     maelys_sys_process_options_t program = {.path = self, .argv = argv};
     maelys_sys_owned_options_t options = options_for(&program, 0, 600);
     options.keeper_path = self; /* says HELLO never, leaves after 1 s */
-    CHECK(unsetenv("OWNED_FAKE") == 0);
     maelys_sys_owned_t *owned = NULL;
     maelys_sys_owned_state_t state;
     CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_ERR_TIMEOUT);
@@ -800,25 +893,38 @@ static int test_fake_keeper(void) {
     CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
     CHECK(state.keeper_reaped);
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK && !owned);
-    /* leaves at once with a code that is no terminal state */
-    CHECK(setenv("OWNED_FAKE", "exit70", 1) == 0);
+    /* leaves at once with a code that is no terminal state: gone before
+     * any program could exist, nothing is left to follow */
+    options.keeper_path = fake_exit70;
     options.start_deadline_ms = after_ms(10000);
-    maelys_sys_result_t lost = maelys_sys_owned_spawn(&options, &owned);
-    CHECK(unsetenv("OWNED_FAKE") == 0);
-    /* gone before any program could exist: nothing is left to follow */
-    CHECK(lost == MAELYS_SYS_ERR_CLOSED && !owned);
+    CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_ERR_CLOSED && !owned);
+    /* speaks another protocol: incompatible, not closed, nothing started */
+    options.keeper_path = fake_hello99;
+    options.start_deadline_ms = after_ms(10000);
+    CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_ERR_UNSUPPORTED && !owned);
     return 0;
 }
 
-/* Starts and stops, many times: nothing left open, nobody left behind. */
+/* Starts that succeed and starts that fail, by turns, many times: nothing
+ * left open, nobody left behind. A hundred cycles; MAELYS_SYS_OWNED_CYCLES
+ * sets another number, a thousand for the campaign. */
 static int test_many_cycles(void) {
     int before = count_open();
-    for (int cycle = 0; cycle < 30; ++cycle) {
+    long cycles = 100;
+    const char *asked = getenv("MAELYS_SYS_OWNED_CYCLES");
+    if (asked && atol(asked) > 0) cycles = atol(asked);
+    char missing[sizeof(root) + 16];
+    snprintf(missing, sizeof(missing), "%s/no-program", root);
+    for (long cycle = 0; cycle < cycles; ++cycle) {
         char *argv[] = {self, "--child", "exit", "0", NULL};
-        maelys_sys_process_options_t program = {.path = self, .argv = argv};
+        maelys_sys_process_options_t program = {.path = cycle % 2 ? missing : self, .argv = argv};
         maelys_sys_owned_options_t options = options_for(&program, MAELYS_SYS_OWNED_END_WITH_LEADER, 30000);
         maelys_sys_owned_t *owned = NULL;
         maelys_sys_owned_state_t state;
+        if (cycle % 2) {
+            CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_ERR_NOT_FOUND && !owned);
+            continue;
+        }
         CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_OK);
         CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
         CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
@@ -826,7 +932,27 @@ static int test_many_cycles(void) {
     }
     CHECK(count_open() == before);
     errno = 0;
-    CHECK(waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD);
+    pid_t left = waitpid(-1, NULL, WNOHANG);
+    if (left >= 0 || errno != ECHILD) {
+        /* Who is still there, and whether it is a delay or a leak: the
+         * children listed, then one second later, with what a reaping
+         * finds by then. */
+        char command[160];
+        snprintf(command, sizeof(command), "ps -axo pid,ppid,pgid,stat,command | awk '$2 == %ld' >&2", (long)getpid());
+        fprintf(stderr, "children left at the end of the cycles (pid ppid pgid stat command):\n");
+        /* GCC does not take a (void) cast for warn_unused_result */
+        int listed = system(command);
+        (void)listed;
+        sleep_ms(1000);
+        int status = 0;
+        errno = 0;
+        pid_t later = waitpid(-1, &status, WNOHANG);
+        fprintf(stderr, "one second later: waitpid(-1) = %ld (errno %d), %s\n", (long)later, errno,
+            later > 0 ? (WIFEXITED(status) ? "exited" : "signaled") : later == 0 ? "still alive" : "none");
+        listed = system(command);
+        (void)listed;
+    }
+    CHECK(left < 0 && errno == ECHILD);
     return 0;
 }
 
@@ -867,6 +993,7 @@ int main(int argc, char **argv) {
     /* as the program will see it: /var is a link on macOS */
     if (realpath(root, resolved) && strlen(resolved) < sizeof(root)) snprintf(root, sizeof(root), "%s", resolved);
     if (open_listener() != 0) return 1;
+    if (write_fakes() != 0) return 1;
     int before = count_open();
     static int (*const cases[])(void) = {test_stop_leader, test_end_with_leader, test_leader_exits_descendant_stays,
         test_host_killed, test_ignore_term, test_escape_is_outside, test_table_env_cwd, test_signals_default,
@@ -892,11 +1019,13 @@ int main(int argc, char **argv) {
     }
     (void)close(listener);
     (void)unlink(witness_path);
+    (void)unlink(fake_exit70);
+    (void)unlink(fake_hello99);
     if (rmdir(root) != 0) {
         fprintf(stderr, "work directory not empty: %s\n", root);
         return 1;
     }
-    puts("ok - owned a leader stopped: signal answered, release refused while alive, group gone");
+    puts("ok - owned a leader stopped: a signal taken and answered, saturation refused at sixteen and every accepted request answered, release refused while alive, group gone");
     puts("ok - owned END_WITH_LEADER: a program that exits ends its group");
     puts("ok - owned the leader leaves, a grandchild stays protected until stop; the grace ends with the leader");
     puts("ok - owned the host killed by SIGKILL, a copy of its life pipe held elsewhere: leader and grandchild stopped within the bound, seen from outside");
@@ -906,7 +1035,7 @@ int main(int argc, char **argv) {
     puts("ok - owned the program starts at the default signal state through the keeper");
     puts("ok - owned a stopped keeper is seen unresponsive, then not");
     puts("ok - owned refusals before anything exists; a missing keeper or program starts nothing");
-    puts("ok - owned a keeper that is not one: a timeout leaves a handle to follow, an early exit is a loss");
-    puts("ok - owned thirty cycles: nothing left open, nobody left behind");
+    puts("ok - owned a keeper that is not one: a timeout leaves a handle to follow, an early exit is a loss, another protocol is unsupported");
+    puts("ok - owned a hundred cycles of starts and refused starts: nothing left open, nobody left behind");
     return 0;
 }

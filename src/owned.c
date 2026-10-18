@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +53,9 @@ struct maelys_sys_owned {
     int keeper_fd;
     int ctl;
     int life;
-    pid_t x;
+    atomic_int x;        /* read by owned_pid from any thread */
+    int started_seen;    /* STARTED read: the keeper validated the start */
+    int negotiated;      /* HELLO read with this protocol */
     maelys_sys_owned_phase_t phase;
     maelys_sys_owned_state_t state;
     int final;
@@ -72,6 +75,7 @@ struct maelys_sys_owned {
     int have_stop;
     issued_t issued[ISSUED_KEPT];
     size_t issued_next;
+    size_t outstanding; /* issued and not yet answered: at most OWNED_PENDING_MAX */
 };
 
 static uint64_t now_ms(void) {
@@ -131,6 +135,11 @@ static int enqueue(maelys_sys_owned_t *owned, owned_record_t record) {
 }
 
 static void issue(maelys_sys_owned_t *owned, uint32_t seq) {
+    if (owned->issued[owned->issued_next].seq && !owned->issued[owned->issued_next].answered &&
+        owned->outstanding) {
+        --owned->outstanding; /* evicted unanswered: cannot happen within the limit */
+    }
+    ++owned->outstanding;
     owned->issued[owned->issued_next].seq = seq;
     owned->issued[owned->issued_next].answered = 0;
     owned->issued[owned->issued_next].value = 0;
@@ -140,6 +149,7 @@ static void issue(maelys_sys_owned_t *owned, uint32_t seq) {
 static void answered(maelys_sys_owned_t *owned, uint32_t seq, int value) {
     for (size_t i = 0; i < ISSUED_KEPT; ++i) {
         if (owned->issued[i].seq == seq && owned->issued[i].seq) {
+            if (!owned->issued[i].answered && owned->outstanding) --owned->outstanding;
             owned->issued[i].answered = 1;
             owned->issued[i].value = value;
             return;
@@ -174,7 +184,8 @@ static void apply(maelys_sys_owned_t *owned, const owned_record_t *record, uint6
         owned->state.keeper_unresponsive = 0;
         break;
     case OWNED_K_STARTED:
-        owned->x = (pid_t)record->pid;
+        atomic_store(&owned->x, record->pid);
+        owned->started_seen = 1;
         owned->last_beat = now;
         if (owned->timed_out && owned->phase == MAELYS_SYS_OWNED_START_FAILED) {
             owned->state.started_after_timeout = 1;
@@ -188,7 +199,7 @@ static void apply(maelys_sys_owned_t *owned, const owned_record_t *record, uint6
         if (!owned->final && !(owned->timed_out && record->a == (uint32_t)MAELYS_SYS_OWNED_STARTING)) {
             owned->phase = (maelys_sys_owned_phase_t)record->a;
         }
-        if (record->pid > 0) owned->x = (pid_t)record->pid;
+        if (record->pid > 0) atomic_store(&owned->x, record->pid);
         apply_flags(owned, record->b, record->value);
         break;
     case OWNED_K_ACK:
@@ -198,9 +209,8 @@ static void apply(maelys_sys_owned_t *owned, const owned_record_t *record, uint6
         owned->done_seen = 1;
         owned->final = 1;
         owned->phase = (maelys_sys_owned_phase_t)record->a;
-        if (owned->phase == MAELYS_SYS_OWNED_START_FAILED) owned->phase = MAELYS_SYS_OWNED_START_FAILED;
         apply_flags(owned, record->b, record->value);
-        if (record->pid > 0) owned->x = (pid_t)record->pid;
+        if (record->pid > 0) atomic_store(&owned->x, record->pid);
         {
             owned_record_t ack = make_record(OWNED_H_DONE_ACK);
             (void)enqueue(owned, ack);
@@ -232,7 +242,11 @@ static int read_one(maelys_sys_owned_t *owned, uint64_t now, owned_record_t *out
         if (owned->rlen < OWNED_RECORD_SIZE) continue;
         owned->rlen = 0;
         memcpy(out, owned->rbuf, sizeof(*out));
-        if (out->magic != OWNED_MAGIC || out->protocol != OWNED_PROTOCOL) return -1;
+        /* The magic says it is a keeper; the protocol is judged at HELLO,
+         * so that another protocol is an incompatibility, not a closed
+         * channel. After HELLO, another number is a corrupt channel. */
+        if (out->magic != OWNED_MAGIC) return -1;
+        if (owned->negotiated && out->protocol != OWNED_PROTOCOL) return -1;
         apply(owned, out, now);
         return 1;
     }
@@ -703,7 +717,8 @@ maelys_sys_result_t maelys_sys_owned_spawn(
     /* HELLO, then GO and its body, then ARMED and STARTED */
     owned_record_t record;
     int got = await_record(owned, OWNED_K_HELLO, deadline, &record);
-    if (got != 1 || record.a != OWNED_PROTOCOL) {
+    if (got == 1 && record.a == OWNED_PROTOCOL && record.protocol == OWNED_PROTOCOL) owned->negotiated = 1;
+    if (!owned->negotiated) {
         free(body);
         int reaped = let_keeper_end(owned, got == 0 ? now_ms() + 100u : deadline);
         if (reaped) {
@@ -735,15 +750,17 @@ maelys_sys_result_t maelys_sys_owned_spawn(
     got = await_record(owned, OWNED_K_STARTED, deadline, &record);
     if (got == 1) {
         owned->phase = MAELYS_SYS_OWNED_RUNNING;
-        owned->x = (pid_t)record.pid;
         owned->last_beat = now_ms();
         *out_owned = owned;
         return MAELYS_SYS_OK;
     }
     if (got == -2) {
         /* Refused by the keeper before any program ran: it leaves by
-         * itself; the start's own error is returned. */
+         * itself once its DONE is answered; the start's own error is
+         * returned. */
         int error = record.value;
+        (void)drain(owned, now_ms());
+        (void)flush(owned);
         int reaped = let_keeper_end(owned, deadline);
         if (reaped) {
             destroy(owned);
@@ -758,7 +775,7 @@ maelys_sys_result_t maelys_sys_owned_spawn(
     if (got == 0) {
         /* One last look, without waiting: a complete STARTED wins. */
         (void)drain(owned, now_ms());
-        if (owned->x > 0) {
+        if (owned->started_seen) {
             owned->phase = MAELYS_SYS_OWNED_RUNNING;
             owned->last_beat = now_ms();
             *out_owned = owned;
@@ -787,7 +804,9 @@ maelys_sys_result_t maelys_sys_owned_spawn(
 /* --- following ----------------------------------------------------------- */
 
 pid_t maelys_sys_owned_pid(const maelys_sys_owned_t *owned) {
-    return owned && owned->x > 0 ? owned->x : -1;
+    if (!owned) return -1;
+    int x = atomic_load(&((maelys_sys_owned_t *)owned)->x);
+    return x > 0 ? (pid_t)x : -1;
 }
 
 int maelys_sys_owned_fd(const maelys_sys_owned_t *owned) {
@@ -808,6 +827,14 @@ maelys_sys_result_t maelys_sys_owned_poll(maelys_sys_owned_t *owned, maelys_sys_
 
 static maelys_sys_result_t request(maelys_sys_owned_t *owned, owned_record_t record, int for_stop, uint32_t *out_seq) {
     if (owned->final && owned->state.keeper_reaped) return MAELYS_SYS_ERR_STATE;
+    /* Sixteen requests unanswered at most: the keeper's queue can then
+     * always hold their answers, and the answers kept here are never
+     * evicted before they are read. A stop is let through all the same. */
+    if (!for_stop && owned->outstanding >= OWNED_PENDING_MAX) {
+        (void)flush(owned);
+        (void)drain(owned, now_ms());
+        if (owned->outstanding >= OWNED_PENDING_MAX) return MAELYS_SYS_ERR_WOULD_BLOCK;
+    }
     if (owned->pending_count == OWNED_PENDING_MAX) {
         (void)flush(owned);
         if (owned->pending_count == OWNED_PENDING_MAX) return MAELYS_SYS_ERR_WOULD_BLOCK;
