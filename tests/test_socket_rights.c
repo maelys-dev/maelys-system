@@ -114,12 +114,18 @@ static int exercise(maelys_sys_socket_t *receiver, int sender, int source) {
 }
 
 static int connected_pair(int passcred) {
-    char directory[] = "/tmp/maelys-socket-rights.XXXXXX";
+    /* Under TMPDIR: a build sandbox, Homebrew's among them, refuses a
+     * connection to a Unix socket outside its own temporary directory. */
+    const char *base = getenv("TMPDIR");
+    if (!base || base[0] != '/') base = "/tmp";
+    char directory[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    int written = snprintf(directory, sizeof(directory), "%s/maelys-sr.XXXXXX", base);
+    CHECK(written > 0 && (size_t)written < sizeof(directory));
     CHECK(mkdtemp(directory) != NULL);
     struct sockaddr_un address;
     memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
-    int length = snprintf(address.sun_path, sizeof(address.sun_path), "%s/socket", directory);
+    int length = snprintf(address.sun_path, sizeof(address.sun_path), "%s/s", directory);
     CHECK(length > 0 && (size_t)length < sizeof(address.sun_path));
     socklen_t address_length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + (size_t)length + 1u);
     maelys_sys_socket_t *listener = NULL, *client = NULL, *accepted = NULL;
@@ -160,16 +166,16 @@ static int connected_pair(int passcred) {
 static int datagram_messages(void) {
     const char *base = getenv("TMPDIR");
     if (!base || base[0] != '/') base = "/tmp";
-    char paths[2][96];
+    char paths[2][sizeof(((struct sockaddr_un *)0)->sun_path)];
     struct sockaddr_un addresses[2];
     maelys_sys_socket_t *handles[2] = {NULL, NULL};
     int before = open_count();
     for (int side = 0; side < 2; ++side) {
-        /* The socket path is bounded by sun_path: a long TMPDIR is cut. */
-        int written = snprintf(paths[side], sizeof(paths[side]), "%.50s/maelys-dg-%ld-%d.sock",
+        /* The socket path is bounded by sun_path; a TMPDIR too long for it
+         * fails here rather than being cut to a directory that is not. */
+        int written = snprintf(paths[side], sizeof(paths[side]), "%s/maelys-dg-%ld-%d",
             base, (long)getpid(), side);
         CHECK(written > 0 && (size_t)written < sizeof(paths[side]));
-        CHECK((size_t)written < sizeof(addresses[side].sun_path));
         (void)unlink(paths[side]);
         memset(&addresses[side], 0, sizeof(addresses[side]));
         addresses[side].sun_family = AF_UNIX;

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.2 - 2026-10-18
+
+- No change to the library: 0.13.1 is the same code. Its formula was never
+  published: the Homebrew bottle on macOS 26 failed in `make check`, twice.
+  The build sandbox of Homebrew refuses a connection to a Unix socket
+  outside its own temporary directory, and two tests made theirs under a
+  fixed `/tmp`: the zero-backlog test of `test_sys` and the connected pair
+  of `test_socket_rights`. Both now make it under `TMPDIR`. Reproduced on
+  macOS 26.6.2 with `sandbox-exec` and the two rules of that sandbox:
+  those two tests failed, every test passes now.
+- The datagram test of `test_socket_rights` cut a long `TMPDIR` to fifty
+  characters, a directory that does not exist; a path too long for
+  `sun_path` now fails its check instead.
+
 ## 0.13.1 - 2026-10-17
 
 - A program started by `maelys_sys_process_spawn` no longer inherits what
