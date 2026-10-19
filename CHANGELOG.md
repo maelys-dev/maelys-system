@@ -35,8 +35,8 @@
   packages carry `libexec/maelys-sys/`.
 - Mutation gate at ninety-three: nine faults on the keeper and its host.
   Each mutant's tests run in a session that is emptied when they end, a
-  keeper left by a failed test included; a cleanup that fails stops the
-  gate instead of counting the mutant.
+  keeper left by a failed test included; a failure of the wrapper or of
+  its cleanup stops the gate instead of counting the mutant.
 
 ## 0.13.2 - 2026-10-18
 

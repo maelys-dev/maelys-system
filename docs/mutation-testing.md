@@ -109,8 +109,9 @@ mutant, three times what the suite takes on the slowest host measured, so
 that a loaded host does not pass a survivor off as a hang. Each mutant's
 tests run in a session of their own, which `scripts/run-with-timeout.py`
 empties when they end, whatever process group a leftover chose: a keeper
-of a mutant that failed half-way is not left running. A cleanup that fails
-stops the gate, since the run's status then says nothing of the mutant. A
+of a mutant that failed half-way is not left running. A failure of the
+wrapper, of its cleanup or of itself, stops the gate with what the wrapper
+said, since the run's status then says nothing of the mutant. A
 changed implementation must update anchors and preserve or strengthen the
 fault set. Surviving mutants fail the gate; a missing mutation anchor also
 fails it. The harness targets load-bearing invariants and is not a substitute

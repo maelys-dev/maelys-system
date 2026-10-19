@@ -19,12 +19,18 @@ and after its session, just before the signal: a number reused in that
 last interval would have to go round the whole pid space between two
 system calls, which narrows the race without closing it.
 
-A failed cleanup, a member still alive after the rounds or a signal
-refused for another reason than a process already gone, is said on
-standard error and gives status 125 whatever the command's, so that it is
-never taken for the command's own result. SIGKILL of this wrapper cannot
-be caught and leaves the session as it is. A process that left the
-session by setsid is the test's own to end.
+Status 125 means this wrapper failed, never the command: a cleanup that
+fails (a member still alive after the rounds, a signal refused for
+another reason than a process already gone, the command's leader not
+ended within the rounds after its SIGKILL), a command that cannot be
+started, a wrong invocation, or any error of the wrapper itself. Each is
+said on standard error, on lines that begin with "run-with-timeout:",
+with the command's own status when it has one. A command that exits 125
+by itself is taken for a failure of the wrapper too, which errs on the
+side of a gate that stops. A command ended by a signal gives 128 plus its
+number. SIGKILL of this wrapper cannot be caught and leaves the session
+as it is. A process that left the session by setsid is the test's own to
+end.
 """
 
 import ctypes
@@ -144,12 +150,12 @@ def alive_members(sid):
     return members
 
 
-def sweep(sid):
-    """Kills the session's live members, round after round; returns how
-    many were killed and what went wrong, if anything."""
+def sweep(sid, until):
+    """Kills the session's live members, round after round until none is
+    left or until passes; returns how many were killed and what went
+    wrong, if anything."""
     killed = set()
     refused = {}
-    until = time.monotonic() + ROUNDS_FOR
     while True:
         members = alive_members(sid)
         if not members:
@@ -166,7 +172,7 @@ def sweep(sid):
     problems = []
     left = alive_members(sid)
     if left:
-        problems.append("still alive after %g s of rounds: %s" % (ROUNDS_FOR, " ".join(map(str, left))))
+        problems.append("still alive after the rounds: %s" % " ".join(map(str, left)))
     for pid, code in sorted(refused.items()):
         problems.append("SIGKILL refused for %d: %s" % (pid, os.strerror(code)))
     return len(killed), problems
@@ -179,14 +185,21 @@ def leader_ended(pid):
     return info is not None and info.si_pid == pid
 
 
-def main():
+def say(text):
+    print("run-with-timeout: " + text, file=sys.stderr, flush=True)
+
+
+def run(state):
     if len(sys.argv) < 3:
-        return 2
+        say("usage: run-with-timeout.py SECONDS COMMAND [ARGUMENT...]")
+        return CLEANUP_FAILED
     timeout = float(sys.argv[1])
-    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(number, note_interrupt)
-    process = subprocess.Popen(sys.argv[2:], start_new_session=True)
-    leader = process.pid
+    try:
+        process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+    except OSError as error:
+        say("the command cannot be started: %s" % error)
+        return CLEANUP_FAILED
+    leader = state["leader"] = process.pid
     until = time.monotonic() + timeout
     timed_out = False
     while not interrupted and not leader_ended(leader):
@@ -200,16 +213,27 @@ def main():
             os.killpg(leader, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        while not leader_ended(leader):
-            time.sleep(0.01)
-    killed, problems = sweep(leader)
-    status = process.wait()
+    # The other members are swept whether or not the leader has ended yet,
+    # within one bound for both; the leader, unreaped, keeps the session's
+    # number its own meanwhile.
+    rounds_until = time.monotonic() + ROUNDS_FOR
+    killed, problems = sweep(leader, rounds_until)
+    while not leader_ended(leader) and time.monotonic() < rounds_until:
+        time.sleep(0.01)
+    if not leader_ended(leader):
+        problems.append("the command's leader %d did not end within the rounds after its SIGKILL" % leader)
+        status = None
+    else:
+        status = process.wait()
+        if status < 0:
+            status = 128 - status
+    state["leader"] = None
     if killed:
-        print("run-with-timeout: %d process(es) of the session left alive, killed" % killed, file=sys.stderr)
+        say("%d process(es) of the session left alive, killed" % killed)
     if problems:
         for problem in problems:
-            print("run-with-timeout: cleanup failed: " + problem, file=sys.stderr)
-        print("run-with-timeout: the command's own status was %d" % status, file=sys.stderr)
+            say("cleanup failed: " + problem)
+        say("the command's own status was %s" % ("unknown" if status is None else status))
         return CLEANUP_FAILED
     if interrupted:
         number = interrupted[0]
@@ -219,6 +243,32 @@ def main():
     if timed_out:
         return 124
     return status
+
+
+def main():
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, note_interrupt)
+    state = {"leader": None}
+    try:
+        return run(state)
+    except BaseException as error:
+        # the wrapper's own failure: never the command's result
+        import traceback
+        for line in traceback.format_exception(error):
+            for part in line.rstrip("\n").split("\n"):
+                say("internal error: " + part)
+        if state["leader"] is not None:
+            # at best: the group, then one bounded sweep, each of which may
+            # fail the same way
+            try:
+                os.killpg(state["leader"], signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                sweep(state["leader"], time.monotonic() + ROUNDS_FOR)
+            except BaseException:
+                say("the session could not be swept; members of it may remain")
+        return CLEANUP_FAILED
 
 
 if __name__ == "__main__":

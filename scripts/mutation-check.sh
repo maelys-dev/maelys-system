@@ -43,13 +43,16 @@ PY
     fi
     status=0
     python3 "$root/scripts/run-with-timeout.py" 120 \
-        make -C "$mutant" BUILD=build/mutant test >/dev/null 2>&1 || status=$?
-    # 125: the session of the run could not be cleaned, and its status
-    # says nothing of the mutant; the gate stops on it, never counts it.
+        make -C "$mutant" BUILD=build/mutant test >"$work/$name.log" 2>&1 || status=$?
+    # 125: the wrapper failed, its cleanup or itself, and the status says
+    # nothing of the mutant; the gate stops on it, never counts it, and
+    # shows what the wrapper said.
     if test "$status" -eq 125; then
-        printf '%s\n' "cleanup of the run failed, the gate cannot judge: $name" >&2
+        printf '%s\n' "the wrapper failed, the gate cannot judge: $name" >&2
+        grep '^run-with-timeout:' "$work/$name.log" >&2 || true
         return 1
     fi
+    rm -f "$work/$name.log"
     if test "$status" -eq 0; then
         printf '%s\n' "mutation survived: $name" >&2
         return 1
