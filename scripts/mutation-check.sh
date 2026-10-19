@@ -44,6 +44,12 @@ PY
     status=0
     python3 "$root/scripts/run-with-timeout.py" 120 \
         make -C "$mutant" BUILD=build/mutant test >/dev/null 2>&1 || status=$?
+    # 125: the session of the run could not be cleaned, and its status
+    # says nothing of the mutant; the gate stops on it, never counts it.
+    if test "$status" -eq 125; then
+        printf '%s\n' "cleanup of the run failed, the gate cannot judge: $name" >&2
+        return 1
+    fi
     if test "$status" -eq 0; then
         printf '%s\n' "mutation survived: $name" >&2
         return 1
@@ -319,6 +325,9 @@ run_mutant owned-keeper-kills-leader-only src/keeper/keeper.c \
     'int result = kill(-k->x, SIGKILL);' 'int result = kill(k->x, SIGKILL);'
 run_mutant owned-keeper-heartbeat-silent src/keeper/keeper.c \
     'enqueue(&k, make_record(OWNED_K_BEAT));' '(void)0;'
+run_mutant owned-keeper-finishes-a-cut-started src/keeper/keeper.c \
+    'if (head->type == OWNED_K_STARTED && !k->started_written && (k->aborted || k->owner_lost)) {' \
+    'if (head->type == OWNED_K_STARTED && !k->started_written && k->queue_sent == 0 && (k->aborted || k->owner_lost)) {'
 run_mutant owned-host-sigchld-precondition-ignored src/owned.c \
     'if (current.sa_handler == SIG_IGN || (current.sa_flags & SA_NOCLDWAIT)) return MAELYS_SYS_ERR_STATE;' \
     'if (0) return MAELYS_SYS_ERR_STATE;'

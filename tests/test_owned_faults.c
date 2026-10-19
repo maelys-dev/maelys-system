@@ -190,11 +190,13 @@ static maelys_sys_owned_options_t sleeper_options(const char *keeper, maelys_sys
     return options;
 }
 
-/* STARTED's first byte goes before the start deadline, the rest after it,
- * and the host's last look comes after the rest. The keeper must not take
- * the deadline for an abandon: the host reads the record whole and the
- * start is a success on both sides, the program left running. */
-static int test_split_started_is_validated(void) {
+/* STARTED's first byte goes before the start deadline, the rest held
+ * past it, and the host's last look comes after. A STARTED not wholly
+ * written at the deadline does not validate the start: the keeper
+ * abandons it, kills what it started and writes nothing more, so that the
+ * host never reads a whole STARTED; the host times out, reads a truncated
+ * record and takes the end from the keeper's exit code. */
+static int test_split_started_is_abandoned(void) {
     int before = count_open();
     char *argv[3];
     maelys_sys_process_options_t program;
@@ -215,19 +217,16 @@ static int test_split_started_is_validated(void) {
         fprintf(stderr, "split: the last look was not reached: result %d after %llu ms, handle %p\n", (int)started,
             (unsigned long long)(after_spawn - before_spawn), (void *)owned);
     }
-    CHECK(fault_step == NULL); /* the deadline did pass with STARTED unread */
-    CHECK(started == MAELYS_SYS_OK && owned);
+    CHECK(fault_step == NULL); /* the deadline did pass with STARTED cut */
+    CHECK(started == MAELYS_SYS_ERR_TIMEOUT && owned);
+    /* START_FAILED, or already the keeper's end, which may come while the
+     * host waited at its step */
     CHECK(maelys_sys_owned_poll(owned, &state) == MAELYS_SYS_OK);
-    CHECK(state.phase == MAELYS_SYS_OWNED_RUNNING && !state.leader_ended);
-    sleep_ms(300);
-    CHECK(maelys_sys_owned_poll(owned, &state) == MAELYS_SYS_OK);
-    CHECK(state.phase == MAELYS_SYS_OWNED_RUNNING && !state.leader_ended);
-    uint32_t stop = 0;
-    CHECK(maelys_sys_owned_stop(owned, 1000, &stop) == MAELYS_SYS_OK);
+    CHECK(state.phase == MAELYS_SYS_OWNED_START_FAILED || state.keeper_reaped);
     uint64_t deadline = 0;
     CHECK(maelys_sys_deadline_after(10000, &deadline) == MAELYS_SYS_OK);
     if (maelys_sys_owned_wait(owned, deadline, &state) != MAELYS_SYS_OK) {
-        fprintf(stderr, "split: no final state: phase %d leader_ended %d final? reaped %d elsewhere %d "
+        fprintf(stderr, "split: no final state: phase %d leader_ended %d reaped %d elsewhere %d "
             "from_exit %d truncated %d want_write %d, keeper %ld, keeper_fd %d, ctl %d\n", (int)state.phase,
             state.leader_ended, state.keeper_reaped, state.keeper_reaped_elsewhere, state.state_from_exit_code,
             state.truncated_final, state.want_write, (long)owned->keeper, owned->keeper_fd, owned->ctl);
@@ -250,8 +249,12 @@ static int test_split_started_is_validated(void) {
 #endif
         return 1;
     }
-    CHECK(state.phase == MAELYS_SYS_OWNED_ENDED);
-    CHECK(state.leader.signaled && state.leader.term_signal == SIGTERM);
+    /* never a whole STARTED on the host's side, a cut record, and the
+     * group the keeper killed observed empty, as its exit code says */
+    CHECK(!owned->started_seen && !state.started_after_timeout);
+    CHECK(maelys_sys_owned_pid(owned) == -1);
+    CHECK(state.truncated_final && state.state_from_exit_code);
+    CHECK(state.phase == MAELYS_SYS_OWNED_ENDED && state.keeper_reaped);
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
     CHECK(count_open() == before);
     return 0;
@@ -322,13 +325,13 @@ int main(int argc, char **argv) {
     beside(split_keeper, sizeof(split_keeper), "keeper_split_started");
     beside(never_reap_keeper, sizeof(never_reap_keeper), "keeper_never_reap");
     if (warm_up(split_keeper) || warm_up(never_reap_keeper)) return 1;
-    int failed = test_started_then_done_in_the_last_look() || test_split_started_is_validated() ||
+    int failed = test_started_then_done_in_the_last_look() || test_split_started_is_abandoned() ||
         test_linger_with_leader_unreaped();
     (void)unlink(fake);
     if (failed) return 1;
     if (rmdir(root) != 0) return 1;
     puts("ok - owned white box: STARTED and DONE read in the last look give a success whose state is DONE's");
-    puts("ok - owned white box: a STARTED begun before the deadline and finished after it is a success on both sides");
+    puts("ok - owned white box: a STARTED cut by the deadline validates nothing: never finished, a timeout on both sides");
     puts("ok - owned white box: a leader never reaped ends in UNCERTAIN_FINAL at the linger's own deadline, without idle turns");
     return 0;
 }

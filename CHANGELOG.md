@@ -33,7 +33,10 @@
 - Example `owned-launch`; `make install` installs the keeper; the install
   check and the formula run a program through the installed keeper;
   packages carry `libexec/maelys-sys/`.
-- Mutation gate at ninety-two: eight faults on the keeper and its host.
+- Mutation gate at ninety-three: nine faults on the keeper and its host.
+  Each mutant's tests run in a session that is emptied when they end, a
+  keeper left by a failed test included; a cleanup that fails stops the
+  gate instead of counting the mutant.
 
 ## 0.13.2 - 2026-10-18
 

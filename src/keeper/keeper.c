@@ -128,7 +128,7 @@ typedef struct keeper {
     pid_t x;
     int x_created;      /* a child exists */
     int exec_confirmed; /* the program runs: the barrier is behind */
-    int started_written; /* STARTED begun on the wire: the start is validated */
+    int started_written; /* STARTED wholly written: the start is validated */
 #if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
     int split_held; /* 0 not yet, 1 first byte sent and the rest held, 2 released */
 #endif
@@ -236,20 +236,32 @@ static void send_ack(keeper_t *k, uint32_t seq, int value) {
 /* Pushes what waits, as far as the socket admits; -1 when the channel is
  * gone.
  *
- * STARTED validates the start as soon as its first byte is on the wire:
- * a record begun is always finished, so the host will read it whole and
- * validate the start too, and the two sides cannot disagree. A STARTED
- * not begun when the start is abandoned is withdrawn, never sent. The
- * channel broken in the middle of one means the host is gone, which is a
- * loss of the owner anyway. */
+ * STARTED validates the start once its last byte is on the wire, never a
+ * part of it, which is also the first moment the host can read it whole.
+ * A STARTED not wholly written when the start is abandoned, at its
+ * deadline, by ABORT or by the loss of the owner, is never finished: not
+ * begun, it is withdrawn; begun, the keeper writes nothing more on the
+ * channel, whose framing a record cut short has ended. The host then reads
+ * a truncated record, never a STARTED, and takes the keeper's end from its
+ * exit code. Should the keeper die between the first byte and the last,
+ * the host reads the same truncated record and a keeper lost. */
 static int flush(keeper_t *k) {
     while (k->queue_count && !k->ctl_closed) {
         owned_record_t *head = &k->queue[k->queue_head];
-        if (head->type == OWNED_K_STARTED && k->aborted && k->queue_sent == 0) {
-            /* Abandoned before a byte of it went: not sent at all. */
-            k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
-            --k->queue_count;
-            continue;
+        if (head->type == OWNED_K_STARTED && !k->started_written && (k->aborted || k->owner_lost)) {
+            if (k->queue_sent == 0) {
+                /* abandoned before a byte of it went: not sent at all */
+                k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
+                --k->queue_count;
+                continue;
+            }
+            /* abandoned in the middle: the channel is cut, kept open so
+             * that the host sees its end with the keeper's, not before */
+            trace("STARTED cut after %zu bytes: nothing more written", k->queue_sent);
+            k->ctl_closed = 1;
+            k->queue_count = 0;
+            k->queue_sent = 0;
+            return 0;
         }
         const uint8_t *bytes = (const uint8_t *)head;
         size_t chunk = OWNED_RECORD_SIZE - k->queue_sent;
@@ -274,27 +286,25 @@ static int flush(keeper_t *k) {
         }
         trace("sent type %u, %zd bytes", (unsigned)head->type, sent);
         k->queue_sent += (size_t)sent;
-        if (head->type == OWNED_K_STARTED && !k->started_written) {
-            /* begun: validated, and the start deadline is over */
 #if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+        if (head->type == OWNED_K_STARTED && k->split_held == 0) {
+            /* past the deadline before the rest may go, and a whole turn
+             * of the loop, its deadline check included, before */
             uint64_t hold_until = k->start_deadline + 200u;
-#endif
-            k->started_written = 1;
-            k->start_deadline = 0;
-#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
-            if (k->split_held == 0) {
-                /* past the deadline before the rest may go, and a whole
-                 * turn of the loop, its deadline check included, before */
-                k->split_held = 1;
-                while (now_ms() < hold_until) {
-                    struct timespec pause = {0, 5000000L};
-                    (void)nanosleep(&pause, NULL);
-                }
-                return 0;
+            k->split_held = 1;
+            while (now_ms() < hold_until) {
+                struct timespec pause = {0, 5000000L};
+                (void)nanosleep(&pause, NULL);
             }
-#endif
+            return 0;
         }
+#endif
         if (k->queue_sent == OWNED_RECORD_SIZE) {
+            if (head->type == OWNED_K_STARTED) {
+                /* wholly written: validated, and the start deadline is over */
+                k->started_written = 1;
+                k->start_deadline = 0;
+            }
             if (head->type == OWNED_K_DONE) k->done_queued = 2;
             k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
             --k->queue_count;
