@@ -63,9 +63,12 @@ static char root[256];
 static char witness_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static int listener = -1;
 
-/* The fabricated host of test_host_killed, to kill if a check fails
- * before the test does: its keeper then ends its group. */
+/* The fabricated host of test_host_killed and the dormant holder of its
+ * life pipe, to kill if a check fails before the test does: the keeper
+ * then ends its group, and the holder, which never ends by itself, is not
+ * left behind. */
 static pid_t pending_host;
+static pid_t pending_holder;
 
 /* A beat: one byte of kind, then the monotonic time of its production,
  * so that the test dates the work when it was done, not when it was read. */
@@ -607,6 +610,7 @@ static int test_host_killed(void) {
     int result = -1;
     long x = 0, holder = 0;
     CHECK(sscanf(line, "%d %ld %ld", &result, &x, &holder) == 3);
+    pending_holder = (pid_t)holder;
     CHECK(result == MAELYS_SYS_OK && x > 0 && holder > 0);
     witness_t witnesses[WITNESSES_MAX];
     int count = 0;
@@ -648,6 +652,7 @@ static int test_host_killed(void) {
     CHECK(maelys_sys_process_release(&host) == MAELYS_SYS_OK);
     /* the holder of the copy, the test's own to end */
     CHECK(kill((pid_t)holder, SIGKILL) == 0);
+    pending_holder = 0;
     drop_witnesses(witnesses, count);
     return 0;
 }
@@ -991,6 +996,36 @@ static int test_uncertain_then_ended(void) {
 }
 #endif
 
+/* What a handle and the processes around it look like, for a failure that
+ * is not understood yet: the state, then the test's children and theirs. */
+static void say_where(const char *what, maelys_sys_owned_t *owned) {
+    maelys_sys_owned_state_t state;
+    (void)maelys_sys_owned_poll(owned, &state);
+    fprintf(stderr, "%s: phase %d leader_ended %d (exited %d code %d signaled %d sig %d) unreaped %d refused %d "
+        "present %d unresponsive %d failure %d reaped %d elsewhere %d truncated %d after_timeout %d "
+        "from_exit %d want_write %d x %ld\n", what, (int)state.phase, state.leader_ended,
+        state.leader.exited, state.leader.exit_code, state.leader.signaled, state.leader.term_signal,
+        state.leader_unreaped, state.last_signal_refused, state.members_present, state.keeper_unresponsive,
+        state.keeper_failure, state.keeper_reaped, state.keeper_reaped_elsewhere, state.truncated_final,
+        state.started_after_timeout, state.state_from_exit_code, state.want_write,
+        (long)maelys_sys_owned_pid(owned));
+    char command[200];
+    snprintf(command, sizeof(command),
+        "ps -axo pid,ppid,pgid,stat,command | awk '$2 == %ld || $3 == %ld' >&2", (long)getpid(),
+        (long)maelys_sys_owned_pid(owned));
+    int listed = system(command);
+    (void)listed;
+#if defined(__APPLE__)
+    /* where the program is, if it still runs */
+    if (maelys_sys_owned_pid(owned) > 0) {
+        snprintf(command, sizeof(command), "sample %ld 1 2>/dev/null | sed -n '/Call graph/,/Total number/p' | head -40 >&2",
+            (long)maelys_sys_owned_pid(owned));
+        listed = system(command);
+        (void)listed;
+    }
+#endif
+}
+
 /* Starts that succeed and starts that fail, by turns, many times: nothing
  * left open, nobody left behind. A hundred cycles; MAELYS_SYS_OWNED_CYCLES
  * sets another number, a thousand for the campaign. */
@@ -1012,7 +1047,13 @@ static int test_many_cycles(void) {
             continue;
         }
         CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_OK);
-        CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
+        /* Thirty seconds: an exec was measured staying in _dyld_start for
+         * over ten on one machine, the program then not started at all. */
+        if (maelys_sys_owned_wait(owned, after_ms(30000), &state) != MAELYS_SYS_OK) {
+            fprintf(stderr, "cycle %ld: no final state in 30 s\n", cycle);
+            say_where("at the deadline", owned);
+            return 1;
+        }
         CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
         CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
     }
@@ -1097,6 +1138,7 @@ int main(int argc, char **argv) {
     }
     if (failed) {
         if (pending_host > 0) (void)kill(pending_host, SIGKILL);
+        if (pending_holder > 0) (void)kill(pending_holder, SIGKILL);
         return 1;
     }
     if (count_open() != before) {

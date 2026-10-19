@@ -69,6 +69,9 @@ PROCESS_TEST := $(BUILD)/tests/test_process
 PROCESS_FAULT_TEST := $(BUILD)/tests/test_process_faults
 OWNED_TEST := $(BUILD)/tests/test_owned
 OWNED_FAULT_TEST := $(BUILD)/tests/test_owned_faults
+# Keepers built with one fault each, for the white-box test only.
+KEEPER_SPLIT := $(BUILD)/tests/keeper_split_started
+KEEPER_NEVER_REAP := $(BUILD)/tests/keeper_never_reap
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST) \
 	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST) $(OWNED_TEST) \
@@ -113,6 +116,16 @@ $(LIB): $(OBJECTS)
 	$(AR) rcs $@ $^
 
 $(OWNED_TEST): $(KEEPER)
+
+$(OWNED_FAULT_TEST): $(KEEPER_SPLIT) $(KEEPER_NEVER_REAP)
+
+$(KEEPER_SPLIT): $(KEEPER_SOURCE) $(LIB)
+	@mkdir -p $(@D)
+	$(CC) $(COMMON_CPPFLAGS) -Isrc -DMAELYS_SYS_KEEPER_SPLIT_STARTED $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+
+$(KEEPER_NEVER_REAP): $(KEEPER_SOURCE) $(LIB)
+	@mkdir -p $(@D)
+	$(CC) $(COMMON_CPPFLAGS) -Isrc -DMAELYS_SYS_KEEPER_NEVER_REAP $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BUILD)/tests/test_%: tests/test_%.c $(LIB)
 	@mkdir -p $(@D)

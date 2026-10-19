@@ -75,6 +75,36 @@ static void trace(const char *format, ...) {
 #define trace(...) ((void)0)
 #endif
 
+/* Test builds only, chosen at compile time: MAELYS_SYS_KEEPER_SPLIT_STARTED
+ * sends the first byte of STARTED alone and holds the rest until after the
+ * start deadline; MAELYS_SYS_KEEPER_NEVER_REAP never reaps the leader, as
+ * if it slept in the kernel. A test build counts the turns of its loop
+ * that waited for nothing; the never-reap build, as it leaves, writes the
+ * count into keeper-stats of its working directory if the test made that
+ * file, and never creates one. The split build touches no file. */
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED) || defined(MAELYS_SYS_KEEPER_NEVER_REAP)
+#define KEEPER_TESTING 1
+#include <stdio.h>
+#include <time.h>
+static long idle_turns;
+#if defined(MAELYS_SYS_KEEPER_NEVER_REAP)
+static void write_stats(void) {
+    int fd = open("keeper-stats", O_WRONLY | O_TRUNC | O_CLOEXEC);
+    if (fd < 0) return;
+    char line[64];
+    int length = snprintf(line, sizeof(line), "idle_turns %ld\n", idle_turns);
+    if (length > 0) {
+        /* GCC does not take a (void) cast for warn_unused_result */
+        ssize_t written = write(fd, line, (size_t)length);
+        (void)written;
+    }
+    (void)close(fd);
+}
+#else
+static void write_stats(void) {}
+#endif
+#endif
+
 typedef struct results {
     uint32_t seq[OWNED_RESULTS_KEPT];
     int32_t value[OWNED_RESULTS_KEPT];
@@ -98,7 +128,10 @@ typedef struct keeper {
     pid_t x;
     int x_created;      /* a child exists */
     int exec_confirmed; /* the program runs: the barrier is behind */
-    int started_written;
+    int started_written; /* STARTED begun on the wire: the start is validated */
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+    int split_held; /* 0 not yet, 1 first byte sent and the rest held, 2 released */
+#endif
     int leader_ended, leader_reaped;
     int leader_exited, leader_signaled, leader_code;
     int signal_refused, members_present;
@@ -201,7 +234,14 @@ static void send_ack(keeper_t *k, uint32_t seq, int value) {
 }
 
 /* Pushes what waits, as far as the socket admits; -1 when the channel is
- * gone. STARTED counts as written only once its last byte has gone. */
+ * gone.
+ *
+ * STARTED validates the start as soon as its first byte is on the wire:
+ * a record begun is always finished, so the host will read it whole and
+ * validate the start too, and the two sides cannot disagree. A STARTED
+ * not begun when the start is abandoned is withdrawn, never sent. The
+ * channel broken in the middle of one means the host is gone, which is a
+ * loss of the owner anyway. */
 static int flush(keeper_t *k) {
     while (k->queue_count && !k->ctl_closed) {
         owned_record_t *head = &k->queue[k->queue_head];
@@ -212,7 +252,13 @@ static int flush(keeper_t *k) {
             continue;
         }
         const uint8_t *bytes = (const uint8_t *)head;
-        ssize_t sent = send(k->ctl, bytes + k->queue_sent, OWNED_RECORD_SIZE - k->queue_sent,
+        size_t chunk = OWNED_RECORD_SIZE - k->queue_sent;
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+        if (head->type == OWNED_K_STARTED && k->split_held == 0) chunk = 1;
+        /* the rest held as a full socket would hold it, until a later turn */
+        if (head->type == OWNED_K_STARTED && k->split_held == 1) return 0;
+#endif
+        ssize_t sent = send(k->ctl, bytes + k->queue_sent, chunk,
 #if defined(MSG_NOSIGNAL)
             MSG_NOSIGNAL
 #else
@@ -228,15 +274,27 @@ static int flush(keeper_t *k) {
         }
         trace("sent type %u, %zd bytes", (unsigned)head->type, sent);
         k->queue_sent += (size_t)sent;
-        if (k->queue_sent == OWNED_RECORD_SIZE) {
-            if (head->type == OWNED_K_STARTED && !k->aborted) {
-                /* The last byte gone: the start is validated and its
-                 * deadline is over. Not before, and not once the start
-                 * was abandoned: a STARTED begun before the abandon is
-                 * finished for the framing, and validates nothing. */
-                k->started_written = 1;
-                k->start_deadline = 0;
+        if (head->type == OWNED_K_STARTED && !k->started_written) {
+            /* begun: validated, and the start deadline is over */
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+            uint64_t hold_until = k->start_deadline + 200u;
+#endif
+            k->started_written = 1;
+            k->start_deadline = 0;
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+            if (k->split_held == 0) {
+                /* past the deadline before the rest may go, and a whole
+                 * turn of the loop, its deadline check included, before */
+                k->split_held = 1;
+                while (now_ms() < hold_until) {
+                    struct timespec pause = {0, 5000000L};
+                    (void)nanosleep(&pause, NULL);
+                }
+                return 0;
             }
+#endif
+        }
+        if (k->queue_sent == OWNED_RECORD_SIZE) {
             if (head->type == OWNED_K_DONE) k->done_queued = 2;
             k->queue_head = (k->queue_head + 1) % QUEUE_SIZE;
             --k->queue_count;
@@ -343,12 +401,23 @@ static void look_at_leader(keeper_t *k, uint64_t now) {
  * observed with signal 0 until it is empty or the deadline passes. */
 static void reclaim(keeper_t *k, uint64_t now) {
     if (!k->killed || k->done_queued) return;
+    /* The end of the linger is a deadline of its own, never held back by
+     * the pace of the reaping attempts. */
+    if (k->phase == MAELYS_SYS_OWNED_UNCERTAIN && now >= k->linger_deadline) {
+        finish(k, MAELYS_SYS_OWNED_UNCERTAIN_FINAL, now);
+        return;
+    }
     if (!k->leader_reaped) {
         /* One attempt per turn in RECLAIMING; in UNCERTAIN, one every
          * hundred milliseconds, which is what next_probe then paces. */
         if (k->phase == MAELYS_SYS_OWNED_UNCERTAIN && now < k->next_probe) return;
         int raw = 0;
+#if defined(MAELYS_SYS_KEEPER_NEVER_REAP)
+        pid_t got = 0;
+        (void)raw;
+#else
         pid_t got = waitpid(k->x, &raw, WNOHANG);
+#endif
         if (got == k->x || (got < 0 && errno == ECHILD)) {
             k->leader_reaped = 1;
             if (got == k->x && !k->leader_ended) {
@@ -399,9 +468,6 @@ static void reclaim(keeper_t *k, uint64_t now) {
             k->linger_deadline = now + k->linger_ms;
             send_phase(k);
         }
-    }
-    if (k->phase == MAELYS_SYS_OWNED_UNCERTAIN && now >= k->linger_deadline) {
-        finish(k, MAELYS_SYS_OWNED_UNCERTAIN_FINAL, now);
     }
 }
 
@@ -937,6 +1003,9 @@ int main(int argc, char **argv) {
         if (next) timeout = next > now ? (int)(next - now > 60000u ? 60000u : next - now) : 0;
         int ready = poll(fds, (nfds_t)count, timeout);
         now = now_ms();
+#if defined(KEEPER_TESTING)
+        if (timeout == 0 && ready == 0) ++idle_turns;
+#endif
         trace("poll: ready %d (ctl %x life %x owner %x sig %x report %x), phase %d", ready,
             at_ctl >= 0 ? fds[at_ctl].revents : 0, at_life >= 0 ? fds[at_life].revents : 0,
             at_owner >= 0 ? fds[at_owner].revents : 0, at_sig >= 0 ? fds[at_sig].revents : 0,
@@ -958,10 +1027,16 @@ int main(int argc, char **argv) {
         }
         if (at_ctl >= 0 && (fds[at_ctl].revents & (POLLIN | POLLHUP | POLLERR))) read_control(&k, now);
         if (at_ctl >= 0 && (fds[at_ctl].revents & POLLOUT)) (void)flush(&k);
+#if defined(MAELYS_SYS_KEEPER_SPLIT_STARTED)
+        if (k.split_held == 1) k.split_held = 2; /* the next turn may send the rest */
+#endif
         if (k.exec_confirmed && !k.leader_ended) look_at_leader(&k, now);
     }
     (void)flush(&k);
     trace("exit %d: phase %d, aborted %d, owner lost %d, x %ld", exit_code(&k), (int)k.phase, k.aborted,
         k.owner_lost, (long)k.x);
+#if defined(KEEPER_TESTING)
+    write_stats();
+#endif
     _exit(exit_code(&k));
 }
