@@ -14,6 +14,11 @@ All examples use the public installed surface and are compiled by `make check`.
   three descriptors, /dev/null and one pipe for both outputs, relays its
   output from a loop in which its end is an event like any other, and
   stops it with the ladder, SIGTERM then SIGKILL, when a timer fires.
+- `owned-launch KEEPER GRACE_MS PATH [ARG...]` starts the same program as
+  the leader of an owned group through the keeper at KEEPER, relays its
+  output, and asks the group to stop when a timer fires. Whatever the
+  program started in its group ends with it; had this process been killed,
+  the keeper would have ended the group all the same.
 - `tcp-relay LISTEN_PORT UPSTREAM_IP UPSTREAM_PORT` is a single-connection,
   loopback-only, bidirectional TCP relay. It uses bounded ring buffers,
   readiness-controlled backpressure and half-close propagation. The upstream

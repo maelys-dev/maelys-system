@@ -109,6 +109,12 @@ the optional umbrella header `maelys/sys.h`.
   is reaped before, and the caller reaps nothing blindly (no `wait(-1)`,
   SIGCHLD neither ignored nor `SA_NOCLDWAIT`). In the program, exactly the
   targets of the table are open. No wait on a process is unbounded.
+- An owned process group (`owned.h`) is led by a program a keeper starts
+  for the host, outside the group: the keeper alone signals the group, holds
+  the leader unreaped until its last signal so that the group's number
+  stays taken, and kills the group when the owner's identity ends or its
+  life pipe closes, SIGKILL of the host included. The keeper is installed at
+  `libexec/maelys-sys/keeper`; the host names its path.
 - A loop and a directory watch do not cross `fork`. macOS does not give the
   child their kqueue; Linux shares the parent's epoll and inotify instances
   with it, so an unwatch, a remove or a destroy in the child takes the

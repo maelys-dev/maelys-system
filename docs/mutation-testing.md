@@ -1,7 +1,7 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies eighty-four one-line faults, seventeen of them on Linux only
+directories, applies ninety-three one-line faults, seventeen of them on Linux only
 and fourteen on macOS only, and
 requires the existing tests to reject every mutant. Thirteen target the
 reactor, the last four its fairness between timers and descriptors (0.12.3):
@@ -106,8 +106,28 @@ the capacity expose.
 
 The sweep is deterministic and has a 120-second process timeout per
 mutant, three times what the suite takes on the slowest host measured, so
-that a loaded host does not pass a survivor off as a hang. A
+that a loaded host does not pass a survivor off as a hang. Each mutant's
+tests run in a session of their own, which `scripts/run-with-timeout.py`
+empties when they end, whatever process group a leftover chose: a keeper
+of a mutant that failed half-way is not left running. A failure of the
+wrapper, of its cleanup or of itself, stops the gate with what the wrapper
+said, since the run's status then says nothing of the mutant. A
 changed implementation must update anchors and preserve or strengthen the
 fault set. Surviving mutants fail the gate; a missing mutation anchor also
 fails it. The harness targets load-bearing invariants and is not a substitute
 for a general mutation-testing tool.
+
+## Owned process groups (0.14.0)
+
+Nine faults on the keeper and its host, each rejected by
+`tests/test_owned.c` or, for the ninth, `tests/test_owned_faults.c`: the
+leader reaped before the last signal to the
+group, which frees the group's number while descendants remain;
+`END_WITH_LEADER` ignored; a grace that outlives the leader; the owner's
+identity not watched, so that a copy of the life pipe held elsewhere keeps
+the group alive after the host's death; SIGKILL to the leader alone instead
+of the group; a keeper that never beats; a host that starts under a SIGCHLD
+disposition the kernel reaps by; a release that abandons a living keeper;
+a STARTED cut by the abandon of the start and finished anyway, so that the
+host validates a start the keeper abandoned.
+

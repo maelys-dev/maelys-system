@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+- Owned process groups, `include/maelys/sys/owned.h`: a program started as
+  the leader of a process group that a keeper, outside the group, signals
+  as a whole and kills when the owner is lost, SIGKILL of the host
+  included. The keeper is an executable installed at
+  `libexec/maelys-sys/keeper` under the prefix; the host names its absolute
+  path, and the library carries the path of its own prefix as an
+  indication. The owner is lost when its identity ends or when every copy
+  of a life pipe is closed, whichever first. The keeper alone signals the
+  group; it observes the leader's end without reaping it, so that the
+  group's number stays taken until its last signal, and reaps it after.
+  Measured on both hosts: a zombie's number is never reused, a group whose
+  leader is held is joined only from its own session, and `kill(-X, 0)` on
+  a group of zombies alone answers 0 on Linux and EPERM on macOS, so the
+  end of a group is "no live member observable", nothing about zombies.
+  The host never blocks: the start is bounded by a deadline, the keeper
+  waits in `poll` alone, every reaping is `WNOHANG`. An error of
+  `owned_spawn` may leave a handle to follow (`ERR_TIMEOUT`, and
+  `ERR_CLOSED` after the program was handed over): the handle says what
+  became of the program. `owned_spawn` refuses `ERR_STATE` under a SIGCHLD
+  disposition the kernel reaps by, since the keeper could otherwise be
+  reaped between its creation and the opening of its end descriptor. ABI 1
+  unchanged: new types and functions, the keeper's path and protocol
+  engaged in `docs/abi-lifecycle.md`. Decided with the owner of the
+  harness on 2026-10-18 from a reviewed proposal; the transfer of a group
+  to another owner is designed and not delivered (`TRANSFER` is refused).
+- `src/process.c` lends its start to the keeper: the program is started
+  without the wait for its exec report, which the caller reads as it
+  pleases; `maelys_sys_process_spawn` reads it as before.
+- Example `owned-launch`; `make install` installs the keeper; the install
+  check and the formula run a program through the installed keeper;
+  packages carry `libexec/maelys-sys/`.
+- Mutation gate at ninety-three: nine faults on the keeper and its host.
+  Each mutant's tests run in a session that is emptied when they end, a
+  keeper left by a failed test included; a failure of the wrapper or of
+  its cleanup stops the gate instead of counting the mutant.
+
 ## 0.13.2 - 2026-10-18
 
 - No change to the library: 0.13.1 is the same code. Its formula was never
