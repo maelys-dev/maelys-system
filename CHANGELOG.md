@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- The white-box test of the host's last look gives its scripted keeper
-  twenty seconds to say HELLO instead of three, which the macOS build of
-  the 0.14.0 release missed on a loaded runner.
+- The white-box test of the host's last look gives its program an
+  environment of its own. Its scripted keeper never reads its channel, so
+  GO and its body, which carries the program's environment, had to fit in
+  the socket's buffer; the environment of the macOS build job of the
+  0.14.0 release did not, and the host's send waited out the deadline
+  before its last look, twice. Reproduced with twenty kilobytes added to
+  the environment. No change to the library.
 
 ## 0.14.0 - 2026-10-21
 
