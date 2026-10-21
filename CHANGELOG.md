@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0 - 2026-10-20
+## 0.14.0 - 2026-10-21
 
 - Owned process groups, `include/maelys/sys/owned.h`: a program started as
   the leader of a process group that a keeper, outside the group, signals
