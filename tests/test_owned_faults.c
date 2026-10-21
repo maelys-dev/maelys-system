@@ -120,9 +120,12 @@ static int test_started_then_done_in_the_last_look(void) {
     options.heartbeat_ms = 100;
     options.observe_ms = 1000;
     options.linger_ms = 1000;
-    /* HELLO within three seconds; the rest once the host is at its last
-     * look, which then waits a second for it to arrive */
-    CHECK(maelys_sys_deadline_after(3000, &options.start_deadline_ms) == MAELYS_SYS_OK);
+    /* HELLO before the deadline; the rest once the host is at its last
+     * look, which then waits a second for it to arrive. Twenty seconds:
+     * the keeper here is a shell script, which a loaded runner took over
+     * three seconds to start (the macOS build of the 0.14.0 release), and
+     * an exec has been seen held for over ten on one machine. */
+    CHECK(maelys_sys_deadline_after(20000, &options.start_deadline_ms) == MAELYS_SYS_OK);
     fault_step = "before-last-look";
     fault_sleep_ms = 1000;
     snprintf(fault_signal_path, sizeof(fault_signal_path), "%s/go", root);

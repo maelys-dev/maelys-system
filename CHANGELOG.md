@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The white-box test of the host's last look gives its scripted keeper
+  twenty seconds to say HELLO instead of three, which the macOS build of
+  the 0.14.0 release missed on a loaded runner.
+
 ## 0.14.0 - 2026-10-21
 
 - Owned process groups, `include/maelys/sys/owned.h`: a program started as
