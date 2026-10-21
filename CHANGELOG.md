@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The process tests say how a program ended when a check on its end
+  fails, killed by a signal or returned another code, and what came
+  instead of the "ready" a program owed: a failure under ThreadSanitizer
+  on one macOS 26 host showed a program that stopped early, and said
+  nothing more. No change to what passes.
+
 ## 0.14.2 - 2026-10-21
 
 - No change to the library: 0.14.1 is the same code. Its release is
