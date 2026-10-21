@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.14.2 - 2026-10-21
+
+- No change to the library: 0.14.1 is the same code. Its release is
+  published, its formula is not: both Homebrew bottles failed in
+  `make check`, in `examples-check`. A Homebrew build finds the Python of
+  the system first, 3.9 on macOS, and `scripts/run-with-timeout.py` used
+  `os.waitid`, which Python has on macOS only from 3.13; the CI and the
+  release job install a newer Python first and did not see it. The
+  wrapper now watches the leader's exit with a kqueue where `waitid` is
+  missing, still without reaping it, and its error path no longer needs
+  3.10. Reproduced with `sandbox-exec` and the profile Homebrew generates
+  for a formula's build: `make check` of 0.14.1 failed there and passes
+  with the wrapper of 0.14.2, under `/usr/bin/python3` 3.9.6.
+- The wrapper takes EPERM from `killpg` at a timeout for what it is on
+  macOS, a group of zombies alone, instead of an error of its own; a live
+  member that refuses is still found and reported by the sweep.
+- `macos-gates` runs `examples-check` under the Python of the system.
+
 ## 0.14.1 - 2026-10-21
 
 - No change to the library: 0.14.0 is the same code. Its release was
