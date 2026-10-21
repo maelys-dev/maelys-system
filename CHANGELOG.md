@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.1 - 2026-10-21
+
+- No change to the library: 0.14.0 is the same code. Its release was
+  never published: the macOS build of its release job failed in
+  `make check`, twice, in the white-box test of the host's last look. Its
+  scripted keeper never reads its channel, so GO and its body, which
+  carries the program's environment, had to fit in the socket's buffer;
+  the environment of that job did not, and the host's send waited out the
+  deadline before its last look. The test's program now gets an
+  environment of its own. Reproduced on macOS with twenty kilobytes added
+  to the environment; with two hundred, `test_owned_faults` and
+  `test_owned` pass.
+
 ## 0.14.0 - 2026-10-21
 
 - Owned process groups, `include/maelys/sys/owned.h`: a program started as

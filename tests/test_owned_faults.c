@@ -112,7 +112,14 @@ static const char fake_script_tail[] =
 static int test_started_then_done_in_the_last_look(void) {
     int before = count_open();
     char *argv[] = {self, "--child", "exit", "0", NULL};
-    maelys_sys_process_options_t program = {.path = self, .argv = argv};
+    /* The scripted keeper never reads its channel: GO and its body, which
+     * carries the program's environment, must fit in the socket's buffer,
+     * or the host's send waits out the deadline and never reaches its
+     * last look. The caller's environment is not bounded (a release job's
+     * is larger than the buffer on macOS), so the program gets one of its
+     * own. */
+    char *envp[] = {"PATH=/usr/bin:/bin", NULL};
+    maelys_sys_process_options_t program = {.path = self, .argv = argv, .envp = envp};
     maelys_sys_owned_options_t options;
     memset(&options, 0, sizeof(options));
     options.keeper_path = fake;
