@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.1 - 2026-10-21
 
 - No change to the library: 0.14.0 is the same code. Its release was
   never published: the macOS build of its release job failed in
