@@ -94,6 +94,13 @@ jobs:
         run: make mutation-check CC=clang CXX=clang++
       - name: Static analyzer
         run: make analyze CC=clang
+      # A Homebrew build finds the Python of the system first (3.9 on
+      # macOS), which the scripts of make check must run under: the
+      # bottles of 0.14.1 failed on a wrapper that needed 3.13.
+      - name: Examples under the Python of the system
+        run: |
+          /usr/bin/python3 --version
+          make examples-check CC=clang CXX=clang++ PATH="/usr/bin:$PATH"
 
   benchmark:
     runs-on: ubuntu-24.04

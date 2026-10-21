@@ -180,9 +180,38 @@ def sweep(sid, until):
 
 # --- the command ---------------------------------------------------------
 
+# The leader's end is seen without reaping it. waitid with WNOWAIT does it
+# where Python has it, which on macOS it does only from 3.13; elsewhere,
+# the Python of the system included (3.9, the one a Homebrew build finds
+# first), a kqueue watches the leader's exit.
+_exit_watch = {}
+
+
+def watch_leader(pid):
+    if hasattr(os, "waitid"):
+        return
+    import select
+    queue = select.kqueue()
+    event = select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                          flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)
+    try:
+        queue.control([event], 0, 0)
+    except OSError:
+        # ESRCH: ended already, unreaped
+        queue.close()
+        _exit_watch[pid] = [None, True]
+        return
+    _exit_watch[pid] = [queue, False]
+
+
 def leader_ended(pid):
-    info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
-    return info is not None and info.si_pid == pid
+    if hasattr(os, "waitid"):
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+        return info is not None and info.si_pid == pid
+    watch = _exit_watch[pid]
+    if not watch[1] and watch[0].control(None, 1, 0):
+        watch[1] = True
+    return watch[1]
 
 
 def say(text):
@@ -200,6 +229,7 @@ def run(state):
         say("the command cannot be started: %s" % error)
         return CLEANUP_FAILED
     leader = state["leader"] = process.pid
+    watch_leader(leader)
     until = time.monotonic() + timeout
     timed_out = False
     while not interrupted and not leader_ended(leader):
@@ -208,10 +238,12 @@ def run(state):
             break
         time.sleep(0.01)
     if timed_out or interrupted:
-        # the leader unreaped, its group's number is still its own
+        # the leader unreaped, its group's number is still its own. EPERM
+        # is what macOS answers for a group of zombies alone; a live member
+        # that refuses is the sweep's to find and report
         try:
             os.killpg(leader, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
     # The other members are swept whether or not the leader has ended yet,
     # within one bound for both; the leader, unreaped, keeps the session's
@@ -254,7 +286,7 @@ def main():
     except BaseException as error:
         # the wrapper's own failure: never the command's result
         import traceback
-        for line in traceback.format_exception(error):
+        for line in traceback.format_exception(type(error), error, error.__traceback__):
             for part in line.rstrip("\n").split("\n"):
                 say("internal error: " + part)
         if state["leader"] is not None:
