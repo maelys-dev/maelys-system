@@ -23,6 +23,25 @@
     } \
 } while (0)
 
+/* A check on how a program ended says, when it fails, how it did end:
+ * killed by a signal or returned another code. The verdict is the
+ * check's alone. */
+static void say_status(const char *where, const maelys_sys_process_status_t *status) {
+    if (status->signaled) {
+        fprintf(stderr, "%s: the program was killed by signal %d (%s)\n", where, status->term_signal,
+            strsignal(status->term_signal));
+    } else if (status->exited) {
+        fprintf(stderr, "%s: the program exited with code %d\n", where, status->exit_code);
+    } else {
+        fprintf(stderr, "%s: no end of the program was read\n", where);
+    }
+}
+
+#define CHECK_STATUS(status, condition) do { \
+    if (!(condition)) say_status(__func__, &(status)); \
+    CHECK(condition); \
+} while (0)
+
 #define PATH_ROOM 512
 
 /* A fortified realpath refuses a buffer shorter than PATH_MAX. */
@@ -173,7 +192,7 @@ static int test_ended_before_registration(void) {
     CHECK(poll(&readable, 1, 0) == 1 && (readable.revents & POLLIN));
     CHECK(maelys_sys_monotonic_ms(&now) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(process, now, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == 5);
+    CHECK_STATUS(status, status.exited && status.exit_code == 5);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     return 0;
 }
@@ -259,7 +278,8 @@ static int test_layout_without_close_range(void) {
     maelys_sys_process_status_t status;
     uint64_t deadline = 0;
     CHECK(maelys_sys_deadline_after(3000, &deadline) == MAELYS_SYS_OK);
-    CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK && status.exited);
+    CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
+    CHECK_STATUS(status, status.exited);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     for (int index = 0; index < 40; ++index) CHECK(close(stray[index]) == 0);
     CHECK(close(devnull) == 0 && close(out[0]) == 0 && close(pair[0]) == 0 && close(pair[1]) == 0);

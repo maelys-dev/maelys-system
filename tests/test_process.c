@@ -36,6 +36,25 @@
     } \
 } while (0)
 
+/* A check on how a program ended says, when it fails, how it did end:
+ * killed by a signal or returned another code. The verdict is the
+ * check's alone. */
+static void say_status(const char *where, const maelys_sys_process_status_t *status) {
+    if (status->signaled) {
+        fprintf(stderr, "%s: the program was killed by signal %d (%s)\n", where, status->term_signal,
+            strsignal(status->term_signal));
+    } else if (status->exited) {
+        fprintf(stderr, "%s: the program exited with code %d\n", where, status->exit_code);
+    } else {
+        fprintf(stderr, "%s: no end of the program was read\n", where);
+    }
+}
+
+#define CHECK_STATUS(status, condition) do { \
+    if (!(condition)) say_status(__func__, &(status)); \
+    CHECK(condition); \
+} while (0)
+
 /* Whether a number is one of the table's targets, given as " 0 1 2 ". */
 static int in_table(const char *targets, int fd) {
     char text[16];
@@ -292,7 +311,7 @@ static int ended(maelys_sys_process_t *process, int expected_code) {
     uint64_t deadline = 0;
     CHECK(maelys_sys_deadline_after(30000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == expected_code && !status.signaled);
+    CHECK_STATUS(status, status.exited && status.exit_code == expected_code && !status.signaled);
     return 0;
 }
 
@@ -616,7 +635,7 @@ static int test_signals_not_handed_on(void) {
     CHECK(start(&sleeper, &process) == MAELYS_SYS_OK);
     uint64_t began = now_ms();
     CHECK(maelys_sys_process_terminate(process, 5000, 1000, &status) == MAELYS_SYS_OK);
-    CHECK(status.signaled && status.term_signal == SIGTERM && now_ms() - began < 4000u);
+    CHECK_STATUS(status, status.signaled && status.term_signal == SIGTERM && now_ms() - began < 4000u);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
 
     CHECK(sigaction(SIGPIPE, &before_pipe, NULL) == 0 && sigaction(SIGUSR2, &before_usr2, NULL) == 0);
@@ -635,13 +654,15 @@ static int test_wait_and_signal(void) {
     CHECK(maelys_sys_process_pid(process) > 0 && maelys_sys_process_exit_fd(process) >= 0);
     CHECK(maelys_sys_deadline_after(100, &deadline) == MAELYS_SYS_OK);
     uint64_t began = now_ms();
-    CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_ERR_TIMEOUT);
+    maelys_sys_result_t waited = maelys_sys_process_wait(process, deadline, &status);
+    if (waited != MAELYS_SYS_ERR_TIMEOUT) say_status(__func__, &status);
+    CHECK(waited == MAELYS_SYS_ERR_TIMEOUT);
     CHECK(now_ms() - began >= 90u);
     CHECK(maelys_sys_process_wait(process, MAELYS_SYS_DEADLINE_INFINITE, &status) == MAELYS_SYS_ERR_ARGUMENT);
     CHECK(maelys_sys_process_signal(process, SIGTERM) == MAELYS_SYS_OK);
     CHECK(maelys_sys_deadline_after(1000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
-    CHECK(status.signaled && status.term_signal == SIGTERM && !status.exited);
+    CHECK_STATUS(status, status.signaled && status.term_signal == SIGTERM && !status.exited);
     CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_ERR_STATE);
     CHECK(maelys_sys_process_signal(process, SIGTERM) == MAELYS_SYS_ERR_STATE);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK && !process);
@@ -667,12 +688,23 @@ static int test_terminate_ladder(void) {
     CHECK(start(&launch, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_fd_close(&ready[1]) == MAELYS_SYS_OK);
     char word[8];
-    CHECK(read(ready[0], word, sizeof(word)) == 5); /* "ready": the handler is in place */
+    ssize_t said = read(ready[0], word, sizeof(word)); /* "ready": the handler is in place */
+    if (said != 5) {
+        int saved = errno;
+        uint64_t until = 0;
+        fprintf(stderr, "%s: %zd bytes where \"ready\" was due\n", __func__, said);
+        if (maelys_sys_deadline_after(5000, &until) == MAELYS_SYS_OK &&
+            maelys_sys_process_wait(process, until, &status) == MAELYS_SYS_OK) {
+            say_status(__func__, &status);
+        }
+        errno = saved;
+    }
+    CHECK(said == 5);
     CHECK(maelys_sys_fd_close(&ready[0]) == MAELYS_SYS_OK);
     uint64_t began = now_ms();
     CHECK(maelys_sys_process_terminate(process, 200, 1000, &status) == MAELYS_SYS_OK);
     uint64_t took = now_ms() - began;
-    CHECK(status.signaled && status.term_signal == SIGKILL);
+    CHECK_STATUS(status, status.signaled && status.term_signal == SIGKILL);
     CHECK(took >= 190u && took < 1600u);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     /* A program that heeds SIGTERM ends on the first rung. */
@@ -680,7 +712,7 @@ static int test_terminate_ladder(void) {
     CHECK(start(&polite, &process) == MAELYS_SYS_OK);
     began = now_ms();
     CHECK(maelys_sys_process_terminate(process, 2000, 1000, &status) == MAELYS_SYS_OK);
-    CHECK(status.signaled && status.term_signal == SIGTERM && now_ms() - began < 1500u);
+    CHECK_STATUS(status, status.signaled && status.term_signal == SIGTERM && now_ms() - began < 1500u);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     return 0;
 }
@@ -695,11 +727,11 @@ static int test_terminate_already_ended(void) {
     CHECK(start(&launch, &process) == MAELYS_SYS_OK);
     CHECK(maelys_sys_deadline_after(3000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == 7);
+    CHECK_STATUS(status, status.exited && status.exit_code == 7);
     memset(&status, 0, sizeof(status));
     uint64_t began = now_ms();
     CHECK(maelys_sys_process_terminate(process, 500, 500, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == 7 && now_ms() - began < 100u);
+    CHECK_STATUS(status, status.exited && status.exit_code == 7 && now_ms() - began < 100u);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     /* Ended, not reaped yet. */
     launch_t other = {.mode = "exit", .arguments = {"3"}};
@@ -707,7 +739,7 @@ static int test_terminate_already_ended(void) {
     CHECK(ended_unreaped(maelys_sys_process_pid(process)));
     began = now_ms();
     CHECK(maelys_sys_process_terminate(process, 500, 500, &status) == MAELYS_SYS_OK);
-    CHECK(status.exited && status.exit_code == 3 && now_ms() - began < 100u);
+    CHECK_STATUS(status, status.exited && status.exit_code == 3 && now_ms() - began < 100u);
     CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     return 0;
 }
@@ -740,7 +772,7 @@ static int test_exit_fd_in_loop(void) {
         maelys_sys_process_status_t status;
         CHECK(maelys_sys_monotonic_ms(&deadline) == MAELYS_SYS_OK);
         CHECK(maelys_sys_process_wait(process, deadline, &status) == MAELYS_SYS_OK);
-        CHECK(status.exited && status.exit_code == 0);
+        CHECK_STATUS(status, status.exited && status.exit_code == 0);
         CHECK(maelys_sys_loop_unwatch(loop, watch) == MAELYS_SYS_OK);
         CHECK(maelys_sys_loop_destroy(&loop) == MAELYS_SYS_OK);
         CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
@@ -869,7 +901,7 @@ static int test_many_beside_threads(void) {
         launch_t launch = {.mode = "sleep", .arguments = {"10000"}};
         CHECK(start(&launch, &process) == MAELYS_SYS_OK);
         CHECK(maelys_sys_process_terminate(process, 1000, 1000, &status) == MAELYS_SYS_OK);
-        CHECK(status.signaled && status.term_signal == SIGTERM);
+        CHECK_STATUS(status, status.signaled && status.term_signal == SIGTERM);
         CHECK(maelys_sys_process_release(&process) == MAELYS_SYS_OK);
     }
     CHECK(count_open() == before);
