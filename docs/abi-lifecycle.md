@@ -48,6 +48,10 @@ thread runtime, and link a round trip against it alone.
 The keeper of owned process groups (0.14.0) is an executable installed at
 `libexec/maelys-sys/keeper` under the prefix, named by its absolute path by
 the host; the library carries the path of its own prefix, indicative only.
+That path is the build variable `KEEPER_PATH`, `$(PREFIX)/libexec/maelys-sys/keeper`
+by default, engaged since 0.14.4: a consumer that links the archive and
+does not install the keeper passes a constant `KEEPER_PATH` to the build,
+and no prefix of its own then reaches the archive or rebuilds it.
 Its path under the prefix and the protocol it speaks with the library are
 part of ABI 1: a keeper of a later release accepts every protocol a library
 of ABI 1 speaks, so that a consumer linked statically against an older

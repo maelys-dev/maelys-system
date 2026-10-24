@@ -251,8 +251,8 @@ MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_release(
     maelys_sys_owned_t **owned);
 
 /* Where this build of the library expects the keeper to be installed:
- * libexec/maelys-sys/keeper under its prefix. Indicative; the caller
- * names the path it trusts. */
+ * libexec/maelys-sys/keeper under its prefix, or what the build variable
+ * KEEPER_PATH said. Indicative; the caller names the path it trusts. */
 const char *maelys_sys_owned_keeper_path(void);
 
 #ifdef __cplusplus

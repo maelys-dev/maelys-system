@@ -46,9 +46,13 @@ OBJECTS := $(patsubst %.c,$(BUILD)/%.o,$(SOURCES))
 LIB := $(BUILD)/lib/libmaelys_sys.a
 # The keeper of owned process groups: installed under libexec, named by
 # its absolute path by the host. The library carries the path it expects,
-# which follows PREFIX at the time of the build: install rebuilds it.
+# indicative only (maelys_sys_owned_keeper_path). KEEPER_PATH, a build
+# variable of its own, sets it; by default it follows PREFIX at the time
+# of the build, so that install rebuilds it. A consumer that links the
+# archive and does not install the keeper sets KEEPER_PATH to a constant:
+# then no PREFIX of its own reaches the archive, and nothing is rebuilt.
 KEEPER := $(BUILD)/libexec/maelys-sys/keeper
-KEEPER_PATH := $(PREFIX)/libexec/maelys-sys/keeper
+KEEPER_PATH ?= $(PREFIX)/libexec/maelys-sys/keeper
 KEEPER_PATH_STAMP := $(BUILD)/keeper-path
 TEST := $(BUILD)/tests/test_sys
 CONSUMER_TEST := $(BUILD)/tests/test_consumers
