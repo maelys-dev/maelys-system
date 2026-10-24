@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.3 - 2026-10-24
 
 - A consumer that runs several `make all` at once on one `BUILD`, as a
   mutation gate does, no longer races on the keeper's path stamp: it is
