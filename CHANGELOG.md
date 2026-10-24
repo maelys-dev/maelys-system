@@ -1,7 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.14.3 - 2026-10-24
 
+- A consumer that runs several `make all` at once on one `BUILD`, as a
+  mutation gate does, no longer races on the keeper's path stamp: it is
+  rewritten only when the path changes, through a name of the process's
+  own. Before, the rule rewrote it on every call, and one make could move
+  or remove the file another was about to move: 22 failures in 120
+  concurrent makes, reproduced; maelys-egress saw 7 mutants in 30 fail to
+  build.
+- The keeper is linked with the consumer's `CFLAGS` with
+  `-fsanitize=fuzzer` turned into `fuzzer-no-link`: a consumer that builds
+  the library with a fuzzer's flags no longer fails to link the keeper,
+  which has no fuzzer entry point. The instrumentation stays alike in the
+  library and the keeper.
+- `scripts/consumer-build-check.sh` builds the product as a consumer does,
+  thirty concurrent makes on one `BUILD` and, with clang, a fuzzer's
+  flags; the Linux jobs of the CI run it. It fails on the former Makefile.
 - The process tests say how a program ended when a check on its end
   fails, killed by a signal or returned another code, and what came
   instead of the "ready" a program owed: a failure under ThreadSanitizer

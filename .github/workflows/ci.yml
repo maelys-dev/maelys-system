@@ -43,6 +43,8 @@ jobs:
         run: uname -m
       - name: Install smoke test
         run: make install-check CC=${{ matrix.cc }}
+      - name: Built as a consumer builds it
+        run: sh scripts/consumer-build-check.sh ${{ matrix.cc }}
 
   macos:
     strategy:
