@@ -93,17 +93,29 @@ all: $(LIB) $(KEEPER)
 
 force:
 
+# Rewritten only when the path changes, through a name of this process's
+# own: consumers run several makes of all on one BUILD at once.
 $(KEEPER_PATH_STAMP): force
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(KEEPER_PATH)' > $@.new; \
-	if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+	@if [ "$$(cat $@ 2>/dev/null)" != '$(KEEPER_PATH)' ]; then \
+		printf '%s\n' '$(KEEPER_PATH)' > $@.$$$$.new && mv -f $@.$$$$.new $@; \
+	fi
 
 $(BUILD)/src/owned.o: $(KEEPER_PATH_STAMP)
 $(BUILD)/src/owned.o: CPPFLAGS += -DMAELYS_SYS_KEEPER_PATH='"$(KEEPER_PATH)"'
 
+# The keeper is a program of its own, linked with the consumer's CFLAGS
+# so that it is instrumented as the library is; a fuzzer's instrumentation
+# stays, its main does not: -fsanitize=fuzzer becomes fuzzer-no-link.
+empty :=
+space := $(empty) $(empty)
+comma := ,
+without_fuzzer_main = $(foreach flag,$(1),$(if $(filter -fsanitize=%,$(flag)),-fsanitize=$(subst $(space),$(comma),$(patsubst fuzzer,fuzzer-no-link,$(subst $(comma),$(space),$(patsubst -fsanitize=%,%,$(flag))))),$(flag)))
+KEEPER_CFLAGS = $(call without_fuzzer_main,$(CFLAGS))
+
 $(KEEPER): $(KEEPER_SOURCE) $(LIB)
 	@mkdir -p $(@D)
-	$(CC) $(COMMON_CPPFLAGS) -Isrc $(CPPFLAGS) $(CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
+	$(CC) $(COMMON_CPPFLAGS) -Isrc $(CPPFLAGS) $(KEEPER_CFLAGS) $(COMMON_CFLAGS) $< $(LIB) $(LDFLAGS) -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(@D)
