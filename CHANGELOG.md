@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.4 - 2026-10-24
+
+- `KEEPER_PATH` is a build variable of its own, engaged: the path of the
+  keeper the library records, indicative only, which
+  `maelys_sys_owned_keeper_path` returns and `owned_spawn` never uses.
+  By default it follows `PREFIX`, so that `make install` rebuilds the
+  library with the path it installs the keeper under; given on the
+  command line or in the environment, it is taken as it is, and reaches
+  nested makes through `MAKEFLAGS`. A consumer that links the archive and
+  installs no keeper passes a constant: two installations of its own
+  under two prefixes then rebuild no archive, as before 0.14. Asked by
+  maelys-warden, whose check of exactly that failed on 0.14.3, while
+  neither it nor maelys-egress calls `owned.h`. The command line already
+  took precedence in 0.14.3; it is now said, documented and tested.
+- `scripts/consumer-build-check.sh` builds under two prefixes with
+  `KEEPER_PATH` fixed and requires that nothing is rebuilt, that the path
+  given is the one recorded, and that a nested make receives it; it fails
+  when the variable is overridden in the Makefile.
+
 ## 0.14.3 - 2026-10-24
 
 - A consumer that runs several `make all` at once on one `BUILD`, as a
