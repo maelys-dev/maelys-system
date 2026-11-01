@@ -66,6 +66,8 @@ struct maelys_sys_owned {
     int negotiated;      /* HELLO read with this protocol */
     maelys_sys_owned_phase_t phase;
     maelys_sys_owned_state_t state;
+    maelys_sys_owned_refusal_t refusal;
+    uint64_t refusal_serial;
     int final;
     int done_seen;
     int keeper_raw;
@@ -90,6 +92,14 @@ static uint64_t now_ms(void) {
     uint64_t now = 0;
     (void)maelys_sys_monotonic_ms(&now);
     return now;
+}
+
+maelys_sys_result_t maelys_sys_owned_last_refusal(
+    const maelys_sys_owned_t *owned, maelys_sys_owned_refusal_t *out_refusal) {
+    if (out_refusal) memset(out_refusal, 0, sizeof(*out_refusal));
+    if (!owned || !out_refusal) return MAELYS_SYS_ERR_ARGUMENT;
+    *out_refusal = owned->refusal;
+    return MAELYS_SYS_OK;
 }
 
 static int set_nonblocking(int fd) {
@@ -186,6 +196,22 @@ static void apply_flags(maelys_sys_owned_t *owned, uint32_t flags, int failure) 
 
 /* One record from the keeper, applied to the state. */
 static void apply(maelys_sys_owned_t *owned, const owned_record_t *record, uint64_t now) {
+    if (owned->refusal.supported && record->type != OWNED_K_HELLO) {
+        if (record->length > owned->refusal_serial) {
+            owned_refusal_wire_t wire;
+            memcpy(&wire, record->pad, sizeof(wire));
+            owned->refusal_serial = record->length;
+            owned->refusal.recorded = 1;
+            owned->refusal.monotonic_ms = wire.monotonic_ms;
+            owned->refusal.signo = wire.signo;
+            owned->refusal.error_number = wire.error_number;
+            owned->refusal.phase = (maelys_sys_owned_phase_t)wire.phase;
+            owned->refusal.to_group = !!(wire.flags & OWNED_R_GROUP);
+            owned->refusal.leader_ended = !!(wire.flags & OWNED_R_ENDED);
+            owned->refusal.leader_reaped = !!(wire.flags & OWNED_R_REAPED);
+        }
+        if (record->type == OWNED_K_DONE) owned->refusal.complete = 1;
+    }
     switch (record->type) {
     case OWNED_K_BEAT:
         owned->last_beat = now;
@@ -725,7 +751,10 @@ maelys_sys_result_t maelys_sys_owned_spawn(
     /* HELLO, then GO and its body, then ARMED and STARTED */
     owned_record_t record;
     int got = await_record(owned, OWNED_K_HELLO, deadline, &record);
-    if (got == 1 && record.a == OWNED_PROTOCOL && record.protocol == OWNED_PROTOCOL) owned->negotiated = 1;
+    if (got == 1 && record.a == OWNED_PROTOCOL && record.protocol == OWNED_PROTOCOL) {
+        owned->negotiated = 1;
+        owned->refusal.supported = !!(record.b & OWNED_CAP_REFUSAL);
+    }
     if (!owned->negotiated) {
         free(body);
         int reaped = let_keeper_end(owned, got == 0 ? now_ms() + 100u : deadline);

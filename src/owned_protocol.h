@@ -17,6 +17,7 @@
 #define OWNED_BODY_MAX (1u << 20)
 #define OWNED_PENDING_MAX 16u
 #define OWNED_RESULTS_KEPT 16u
+#define OWNED_CAP_REFUSAL 1u /* HELLO.b: snapshots in keeper records */
 #define OWNED_STOP_SEQUENCES 16u /* the last sequence numbers, kept for stops */
 
 /* Descriptors the keeper is started with. */
@@ -26,7 +27,7 @@
 
 enum owned_type {
     /* keeper -> host */
-    OWNED_K_HELLO = 1,       /* a: protocol */
+    OWNED_K_HELLO = 1,       /* a: protocol, b: optional capabilities */
     OWNED_K_ARMED = 2,
     OWNED_K_STARTED = 3,     /* pid: X */
     OWNED_K_EXEC_FAILED = 4, /* value: errno */
@@ -69,6 +70,25 @@ typedef struct owned_record {
     uint64_t length;
     uint8_t pad[OWNED_RECORD_SIZE - 40];
 } owned_record_t;
+
+/* Additive protocol-1 extension. Old hosts ignore length/pad in keeper
+ * records; old keepers advertise no capability and leave them zero.
+ * Every record after HELLO carries the last EPERM: length is its serial
+ * (0: none), pad this snapshot. Serial orders snapshots because pending
+ * PHASE/BEAT records can be replaced ahead of older records in the queue.
+ * No extra records or queue slots, including on repeated probe failures. */
+#define OWNED_R_GROUP 1u
+#define OWNED_R_ENDED 2u
+#define OWNED_R_REAPED 4u
+typedef struct owned_refusal_wire {
+    uint64_t monotonic_ms;
+    int32_t signo;
+    int32_t error_number;
+    uint32_t phase;
+    uint32_t flags;
+} owned_refusal_wire_t;
+_Static_assert(sizeof(owned_record_t) == OWNED_RECORD_SIZE, "record size");
+_Static_assert(sizeof(owned_refusal_wire_t) == sizeof(((owned_record_t *)0)->pad), "refusal size");
 
 /* The head of the GO body; the strings follow it, each NUL-terminated:
  * path, argv[argc], envp[envc], cwd (empty: none); then fdc int32

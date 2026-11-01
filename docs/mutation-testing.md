@@ -1,7 +1,7 @@
 # Reactor mutation gate
 
 `make mutation-check` copies the working tree into isolated temporary
-directories, applies ninety-three one-line faults, seventeen of them on Linux only
+directories, applies ninety-six one-line faults, seventeen of them on Linux only
 and fourteen on macOS only, and
 requires the existing tests to reject every mutant. Thirteen target the
 reactor, the last four its fairness between timers and descriptors (0.12.3):
@@ -131,3 +131,11 @@ disposition the kernel reaps by; a release that abandons a living keeper;
 a STARTED cut by the abandon of the start and finished anyway, so that the
 host validates a start the keeper abandoned.
 
+## Refusal diagnostics (0.15.0)
+
+Three faults guard the additive refusal accessor: the host accepts an
+older serial (`>` becomes `!=`), the keeper omits recording EPERM, and the
+host marks history complete on PHASE rather than DONE. The host faults
+are rejected by `test_refusal_snapshots` in `tests/test_owned_faults.c`;
+`tests/test_keeper_diagnostics.c` rejects the missing capture using
+simulated kernel outcomes, independently of macOS's zombie behavior.

@@ -73,13 +73,14 @@ PROCESS_TEST := $(BUILD)/tests/test_process
 PROCESS_FAULT_TEST := $(BUILD)/tests/test_process_faults
 OWNED_TEST := $(BUILD)/tests/test_owned
 OWNED_FAULT_TEST := $(BUILD)/tests/test_owned_faults
+KEEPER_DIAGNOSTIC_TEST := $(BUILD)/tests/test_keeper_diagnostics
 # Keepers built with one fault each, for the white-box test only.
 KEEPER_SPLIT := $(BUILD)/tests/keeper_split_started
 KEEPER_NEVER_REAP := $(BUILD)/tests/keeper_never_reap
 TESTS := $(TEST) $(CONSUMER_TEST) $(STRESS_TEST) $(FAULT_TEST) $(BACKEND_TEST) \
 	$(INTERNAL_TEST) $(FILE_TEST) $(FILE_FAULT_TEST) $(FDPASS_TEST) $(FDPASS_STREAM_TEST) $(FDPASS_FAULT_TEST) $(SOCKET_RIGHTS_TEST) \
 	$(DIRWATCH_TEST) $(DIRWATCH_FAULT_TEST) $(PROCESS_TEST) $(PROCESS_FAULT_TEST) $(OWNED_TEST) \
-	$(OWNED_FAULT_TEST)
+	$(OWNED_FAULT_TEST) $(KEEPER_DIAGNOSTIC_TEST)
 HEADER_CPP := $(BUILD)/tests/header_cpp
 PC := $(BUILD)/pkgconfig/maelys-sys.pc
 EXAMPLE_NAMES := tcp-relay timer-server cross-thread-wakeup directory-watch process-launch owned-launch
@@ -132,6 +133,9 @@ $(LIB): $(OBJECTS)
 	$(AR) rcs $@ $^
 
 $(OWNED_TEST): $(KEEPER)
+
+$(KEEPER_DIAGNOSTIC_TEST): CPPFLAGS += -Isrc
+$(KEEPER_DIAGNOSTIC_TEST): $(KEEPER_SOURCE) src/owned_protocol.h
 
 $(OWNED_FAULT_TEST): $(KEEPER_SPLIT) $(KEEPER_NEVER_REAP)
 
@@ -196,6 +200,7 @@ test: $(TESTS)
 	$(PROCESS_FAULT_TEST)
 	$(OWNED_TEST)
 	$(OWNED_FAULT_TEST)
+	$(KEEPER_DIAGNOSTIC_TEST)
 
 consumer-check: $(CONSUMER_TEST)
 	$(CONSUMER_TEST)

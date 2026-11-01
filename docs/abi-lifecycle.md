@@ -25,7 +25,8 @@ Public structures the library reads (`maelys_sys_socket_bind_options_t`,
 `maelys_sys_process_options_t`, `maelys_sys_process_fd_t`,
 `maelys_sys_owned_options_t`) and the ones
 it fills (`maelys_sys_dirwatch_change_t`, `maelys_sys_process_status_t`,
-`maelys_sys_process_identity_t`, `maelys_sys_owned_state_t`) keep their
+`maelys_sys_process_identity_t`, `maelys_sys_owned_state_t`,
+`maelys_sys_owned_refusal_t`) keep their
 fields within ABI 1: a new option is a new structure and a new function,
 never a field added to an existing one. A consumer compiled against an
 older header therefore never passes a shorter object. Result codes are
@@ -55,10 +56,44 @@ and no prefix of its own then reaches the archive or rebuilds it.
 Its path under the prefix and the protocol it speaks with the library are
 part of ABI 1: a keeper of a later release accepts every protocol a library
 of ABI 1 speaks, so that a consumer linked statically against an older
-library works with a newer installed keeper; a library refuses an older
-keeper with `ERR_UNSUPPORTED` before anything starts. A consumer that
+library works with a newer installed keeper; a library refuses a keeper
+with an incompatible protocol with `ERR_UNSUPPORTED` before anything
+starts. Additive protocol-1 refusal diagnostics use a capability in HELLO
+and previously unused bytes of existing records. A keeper without that
+capability remains usable, with diagnostic `supported=0`; a new keeper
+works with old hosts, which ignore these fields. A consumer that
 distributes its own binary and calls `maelys_sys_owned_spawn` ships the
 keeper beside it; a consumer of `fdpass.o` alone does not.
+
+`maelys_sys_owned_last_refusal` is an additive accessor, with its own fixed
+structure; `maelys_sys_owned_state_t` is unchanged. It returns the last
+EPERM received, never an inference about permissions or living members.
+The snapshot records the signal (zero for a presence probe), target,
+errno, monotonic time, phase and leader state known at that syscall.
+Successful later calls do not erase it. `complete` requires DONE from a
+capable keeper: an exit code cannot convey this history, and a keeper
+lost before DONE may have observed a newer refusal. With `recorded=0`,
+only a complete snapshot establishes that no EPERM occurred through DONE.
+This is a last-event snapshot, not a complete log of every refusal.
+
+On macOS, a group containing only its retained zombie leader returns
+EPERM to the protective final SIGKILL. An ordinary natural completion
+with END_WITH_LEADER therefore records a refusal with `leader_ended=1`
+and `leader_reaped=0`, before reaping and ENDED; Linux does not report
+this refusal in the corresponding case. This common macOS diagnostic
+does not itself warrant an alert or a cleanup failure. The two leader
+fields alone cannot establish that there were no living descendants.
+The accessor serves debugging of observations such as the harness's
+refusal flag after confirmed cleanup. Consumers decide cleanup from
+`owned_state`; this diagnostic does not provide a new action policy.
+
+The legacy `last_signal_refused` indicator keeps its behavior: EPERM from
+a group signal or a presence probe sets it; a successful real group
+signal clears it, ESRCH does not. It can coexist with ENDED. Neither
+diagnostic changes the cleanup verdict, stops the protective SIGKILL,
+nor classifies EPERM on a dead leader as harmless: a live descendant may
+still be unsignalable. Pending report coalescing cannot roll the last
+refusal back; snapshots carry a keeper-local serial number.
 
 Private structure layout, backend implementation and test-only code are not
 ABI. Native descriptor integers are part of the explicitly POSIX contract.

@@ -72,6 +72,9 @@ int main(int argc, char **argv) {
     if (maelys_sys_deadline_after(10000, &deadline) != MAELYS_SYS_OK) return 20;
     if (maelys_sys_owned_wait(owned, deadline, &state) != MAELYS_SYS_OK) return 21;
     if (state.phase != MAELYS_SYS_OWNED_ENDED || !state.leader.exited || state.leader.exit_code != 3) return 22;
+    maelys_sys_owned_refusal_t refusal;
+    if (maelys_sys_owned_last_refusal(owned, &refusal) != MAELYS_SYS_OK) return 24;
+    if (!refusal.supported || !refusal.complete) return 25;
     return maelys_sys_owned_release(&owned) == MAELYS_SYS_OK ? 0 : 23;
 }
 EOF
