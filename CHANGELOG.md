@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 - 2026-11-01
 
-- Add `maelys_sys_owned_last_refusal` (for 0.15.0), a cached diagnostic
+- Add `maelys_sys_owned_last_refusal`, a cached diagnostic
   separate from `owned_state`: the last EPERM, its signal or presence probe, target,
   time, phase and leader state at the call. It preserves the refusal
   across later successes and says whether the keeper supports it and
