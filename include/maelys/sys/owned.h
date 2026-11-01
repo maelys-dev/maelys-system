@@ -124,7 +124,9 @@ typedef struct maelys_sys_owned_state {
     int leader_ended;                   /* leader holds its status */
     maelys_sys_process_status_t leader; /* the program's, never the keeper's */
     int leader_unreaped;         /* after SIGKILL the leader still cannot be reaped */
-    int last_signal_refused;     /* kill(-X): EPERM, no member signaled */
+    int last_signal_refused;     /* legacy indicator: group kill or probe returned EPERM;
+                                 * a successful real group signal clears it, ESRCH does not.
+                                 * Can coexist with ENDED; not a cleanup verdict. */
     int members_present;         /* kill(-X, 0) == 0: at least one member, undiagnosed */
     int keeper_unresponsive;     /* no heartbeat within two periods */
     int keeper_failure;          /* errno of an internal failure of the keeper; 0: none */
@@ -136,6 +138,44 @@ typedef struct maelys_sys_owned_state {
     int want_write;              /* a command waits for owned_fd to be writable */
     uint64_t next_deadline_ms;   /* when the host should poll again (heartbeat check); INFINITE: never */
 } maelys_sys_owned_state_t;
+
+/* The last EPERM observed by the keeper, retained across later successful
+ * signals and probes. Fixed within ABI 1; separate from owned_state.
+ * No classification of its cause: a dead leader does not prove that all
+ * members are dead. These are facts known at the syscall, not at poll.
+ * On macOS, the final SIGKILL to a group containing only its retained
+ * zombie leader returns EPERM: this is an ordinary END_WITH_LEADER
+ * completion, followed by reaping and ENDED, not a cleanup incident.
+ * leader_ended=1/leader_reaped=0 is therefore common in such diagnostics;
+ * the same two fields alone cannot exclude living descendants.
+ * This accessor serves diagnosis and debugging. Cleanup decisions use
+ * owned_state, not the presence of a refusal. */
+typedef struct maelys_sys_owned_refusal {
+    int supported;       /* keeper advertised refusal diagnostics */
+    int recorded;        /* a refusal was received; event fields are valid */
+    int complete;        /* DONE received with the final diagnostic snapshot */
+    int signo;           /* 0: presence probe; otherwise an actual signal */
+    int error_number;    /* EPERM; saved immediately after kill */
+    int to_group;        /* 1: program's group; 0: program alone */
+    maelys_sys_owned_phase_t phase;
+    int leader_ended;    /* keeper had observed the leader's termination */
+    int leader_reaped;
+    uint64_t monotonic_ms; /* keeper's clock, at the refusal */
+} maelys_sys_owned_refusal_t;
+
+/* Copies the diagnostic cached by spawn/poll/wait; no I/O, same thread as
+ * poll. ERR_ARGUMENT for NULL. OK even when unsupported or incomplete.
+ * supported=0: old keeper, or HELLO not received; no provenance available.
+ * recorded=0 means no refusal RECEIVED, not proof that none occurred.
+ * complete=0 after loss/truncation or exit-code fallback: a newer refusal
+ * may have been lost. Only complete=1 and recorded=0 establish that this
+ * keeper observed no EPERM through DONE. A refusal is history, never a
+ * cleanup result: read owned_state for ENDED/UNCERTAIN_FINAL/KEEPER_LOST
+ * and keeper_reaped.
+ * Only the last refusal is retained, not an event log. */
+MAELYS_SYS_NODISCARD maelys_sys_result_t maelys_sys_owned_last_refusal(
+    const maelys_sys_owned_t *owned,
+    maelys_sys_owned_refusal_t *out_refusal);
 
 /*
  * Starts the keeper, then the program through it, and returns once the

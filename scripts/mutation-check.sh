@@ -325,7 +325,7 @@ run_mutant owned-keeper-owner-identity-ignored src/keeper/keeper.c \
     'if (at_owner >= 0 && fds[at_owner].revents) lose(&k, ESRCH, now);' \
     'if (at_owner >= 0 && fds[at_owner].revents && 0) lose(&k, ESRCH, now);'
 run_mutant owned-keeper-kills-leader-only src/keeper/keeper.c \
-    'int result = kill(-k->x, SIGKILL);' 'int result = kill(k->x, SIGKILL);'
+    'int result = signal_program(k, 1, SIGKILL);' 'int result = signal_program(k, 0, SIGKILL);'
 run_mutant owned-keeper-heartbeat-silent src/keeper/keeper.c \
     'enqueue(&k, make_record(OWNED_K_BEAT));' '(void)0;'
 run_mutant owned-keeper-finishes-a-cut-started src/keeper/keeper.c \
@@ -337,5 +337,16 @@ run_mutant owned-host-sigchld-precondition-ignored src/owned.c \
 run_mutant owned-host-release-abandons-a-living-keeper src/owned.c \
     'if (!handle->state.keeper_reaped) return MAELYS_SYS_ERR_STATE;' \
     'if (0) return MAELYS_SYS_ERR_STATE;'
+
+# Refusal diagnostics (0.15.0): ordering, capture, and final completeness.
+run_mutant owned-host-refusal-snapshot-regresses src/owned.c \
+    'if (record->length > owned->refusal_serial) {' \
+    'if (record->length != owned->refusal_serial) {'
+run_mutant owned-keeper-refusal-not-recorded src/keeper/keeper.c \
+    'if (result < 0 && saved == EPERM) {' \
+    'if (result < 0 && saved == EPERM && 0) {'
+run_mutant owned-host-refusal-complete-before-done src/owned.c \
+    'if (record->type == OWNED_K_DONE) owned->refusal.complete = 1;' \
+    'if (record->type == OWNED_K_PHASE) owned->refusal.complete = 1;'
 
 printf '%s\n' "mutation check: $killed/$killed killed"

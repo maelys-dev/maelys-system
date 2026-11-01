@@ -135,6 +135,8 @@ typedef struct keeper {
     int leader_ended, leader_reaped;
     int leader_exited, leader_signaled, leader_code;
     int signal_refused, members_present;
+    owned_refusal_wire_t refusal;
+    uint64_t refusal_serial;
     int failure;
     int armed, owner_lost, aborted, stopping, killed;
     maelys_sys_owned_phase_t phase;
@@ -188,6 +190,10 @@ static unsigned phase_flags(const keeper_t *k) {
 /* Queues a record; BEAT and PHASE replace a pending one of their kind. */
 static void enqueue(keeper_t *k, owned_record_t record) {
     if (k->ctl_closed) return;
+    if (record.type != OWNED_K_HELLO) {
+        record.length = k->refusal_serial;
+        memcpy(record.pad, &k->refusal, sizeof(k->refusal));
+    }
     if (record.type == OWNED_K_BEAT || record.type == OWNED_K_PHASE) {
         for (size_t i = 0; i < k->queue_count; ++i) {
             size_t at = (k->queue_head + i) % QUEUE_SIZE;
@@ -316,6 +322,26 @@ static int flush(keeper_t *k) {
 
 /* --- the group --------------------------------------------------------- */
 
+/* Capture facts without changing kill's result/errno or the legacy flag.
+ * A successful call never erases the last refusal. No interpretation of
+ * EPERM: in particular a dead leader says nothing about descendants. */
+static int signal_program(keeper_t *k, int to_group, int signo) {
+    int result = kill(to_group ? -k->x : k->x, signo);
+    int saved = errno;
+    if (result < 0 && saved == EPERM) {
+        ++k->refusal_serial;
+        k->refusal.monotonic_ms = now_ms();
+        k->refusal.signo = signo;
+        k->refusal.error_number = saved;
+        k->refusal.phase = (uint32_t)k->phase;
+        k->refusal.flags = (to_group ? OWNED_R_GROUP : 0u) |
+            (k->leader_ended ? OWNED_R_ENDED : 0u) |
+            (k->leader_reaped ? OWNED_R_REAPED : 0u);
+    }
+    errno = saved;
+    return result;
+}
+
 static void note_kill(keeper_t *k, int result) {
     if (result == 0) k->signal_refused = 0;
     else if (errno == EPERM) k->signal_refused = 1;
@@ -326,8 +352,8 @@ static void note_kill(keeper_t *k, int result) {
  * is killed by its number too, which it reserves as an unreaped child. */
 static void kill_group(keeper_t *k, uint64_t now) {
     if (!k->x_created || k->leader_reaped) return;
-    if (!k->exec_confirmed) (void)kill(k->x, SIGKILL);
-    int result = kill(-k->x, SIGKILL);
+    if (!k->exec_confirmed) (void)signal_program(k, 0, SIGKILL);
+    int result = signal_program(k, 1, SIGKILL);
     note_kill(k, result);
     k->killed = 1;
     k->phase = MAELYS_SYS_OWNED_RECLAIMING;
@@ -460,7 +486,7 @@ static void reclaim(keeper_t *k, uint64_t now) {
     }
     if (k->leader_reaped && now >= k->next_probe && k->phase != MAELYS_SYS_OWNED_RECLAIMING) {
         errno = 0;
-        int probe = kill(-k->x, 0);
+        int probe = signal_program(k, 1, 0);
         if (probe != 0 && errno == ESRCH) {
             k->members_present = 0;
             finish(k, MAELYS_SYS_OWNED_ENDED, now);
@@ -651,7 +677,7 @@ static void request_stop(keeper_t *k, uint32_t seq, uint64_t grace_ms, uint64_t 
         kill_group(k, now);
         return;
     }
-    int result = kill(-k->x, SIGTERM);
+    int result = signal_program(k, 1, SIGTERM);
     int error = result == 0 ? 0 : errno;
     note_kill(k, result);
     send_ack(k, seq, error);
@@ -706,7 +732,7 @@ static void handle_request(keeper_t *k, const owned_record_t *record, uint64_t n
         if (!k->x_created || k->leader_reaped || !k->exec_confirmed) {
             error = ESRCH;
         } else {
-            int result = kill(record->a ? -k->x : k->x, record->value);
+            int result = signal_program(k, record->a != 0, record->value);
             error = result == 0 ? 0 : errno;
             if (record->a) note_kill(k, result);
         }
@@ -912,6 +938,7 @@ int main(int argc, char **argv) {
     k.linger_ms = 60000u;
     k.heartbeat_ms = 1000u;
     owned_record_t hello = make_record(OWNED_K_HELLO);
+    hello.b = OWNED_CAP_REFUSAL;
     hello.a = OWNED_PROTOCOL;
     enqueue(&k, hello);
 

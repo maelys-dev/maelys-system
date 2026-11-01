@@ -214,9 +214,11 @@ static int run_child(int argc, char **argv) {
     action.sa_handler = on_usr1;
     sigaction(SIGUSR1, &action, NULL);
     if (strcmp(mode, "ignore-term") == 0) signal(SIGTERM, SIG_IGN);
-    if (strcmp(mode, "grand") == 0 || strcmp(mode, "grand-exit") == 0 || strcmp(mode, "escape") == 0) {
+    if (strcmp(mode, "grand") == 0 || strcmp(mode, "grand-exit") == 0 || strcmp(mode, "escape") == 0 ||
+        strcmp(mode, "grand-ignore-term") == 0) {
         pid_t child = fork();
         if (child == 0) {
+            if (strcmp(mode, "grand-ignore-term") == 0) signal(SIGTERM, SIG_IGN);
             if (strcmp(mode, "escape") == 0) (void)setsid();
             int fd = announce(path, strcmp(mode, "escape") == 0 ? "escaped" : "grandchild");
             if (fd >= 0) beat_until_stopped(fd);
@@ -538,7 +540,83 @@ static int test_end_with_leader(void) {
     CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
     CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
     CHECK(state.leader_ended && state.leader.exited && state.leader.exit_code == 7);
+    maelys_sys_owned_refusal_t refusal;
+    CHECK(maelys_sys_owned_last_refusal(owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.supported && refusal.complete);
+#if defined(__APPLE__)
+    CHECK(refusal.recorded && refusal.signo == SIGKILL && refusal.error_number == EPERM);
+    CHECK(refusal.to_group && refusal.leader_ended && !refusal.leader_reaped);
+    CHECK(state.last_signal_refused);
+#else
+    CHECK(!refusal.recorded);
+#endif
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
+    return 0;
+}
+
+/* TERM is acknowledged on a live program. END_WITH_LEADER then sends
+ * protective KILL to its retained zombie. On macOS that EPERM is history,
+ * while the later ESRCH and keeper reap still establish cleanup. */
+static int test_term_refusal_diagnostic(void) {
+    char *argv[5];
+    maelys_sys_process_options_t program;
+    program_for(&program, argv, "leader");
+    maelys_sys_owned_options_t options = options_for(&program, MAELYS_SYS_OWNED_END_WITH_LEADER, 30000);
+    maelys_sys_owned_t *owned = NULL;
+    maelys_sys_owned_state_t state;
+    CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_OK);
+    witness_t witnesses[WITNESSES_MAX];
+    int count = 0;
+    CHECK(gather(witnesses, &count, 1, after_ms(30000)) == 0);
+    uint64_t before = now_ms();
+    uint32_t seq = 0;
+    CHECK(maelys_sys_owned_signal(owned, SIGTERM, 1, &seq) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
+    int error = -1;
+    CHECK(maelys_sys_owned_result(owned, seq, &error) == MAELYS_SYS_OK && error == 0);
+    CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
+    CHECK(state.leader.signaled && state.leader.term_signal == SIGTERM && state.keeper_reaped);
+    CHECK(!state.members_present && !state.keeper_failure);
+    maelys_sys_owned_refusal_t refusal;
+    CHECK(maelys_sys_owned_last_refusal(owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.supported && refusal.complete);
+#if defined(__APPLE__)
+    CHECK(refusal.recorded && refusal.signo == SIGKILL && refusal.error_number == EPERM);
+    CHECK(refusal.to_group && refusal.leader_ended && !refusal.leader_reaped);
+    CHECK(refusal.phase == MAELYS_SYS_OWNED_RUNNING && state.last_signal_refused);
+    CHECK(refusal.monotonic_ms >= before && refusal.monotonic_ms <= now_ms());
+#else
+    (void)before;
+    CHECK(!refusal.recorded);
+#endif
+    CHECK(all_ended_by(witnesses, count, after_ms(1000)));
+    CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
+    drop_witnesses(witnesses, count);
+    return 0;
+}
+
+/* A live descendant that ignores TERM must still take the protective
+ * KILL when its leader terminates. Register both identities first. */
+static int test_end_with_leader_kills_descendant(void) {
+    char *argv[5];
+    maelys_sys_process_options_t program;
+    program_for(&program, argv, "grand-ignore-term");
+    maelys_sys_owned_options_t options = options_for(&program, MAELYS_SYS_OWNED_END_WITH_LEADER, 30000);
+    maelys_sys_owned_t *owned = NULL;
+    maelys_sys_owned_state_t state;
+    CHECK(maelys_sys_owned_spawn(&options, &owned) == MAELYS_SYS_OK);
+    witness_t witnesses[WITNESSES_MAX];
+    int count = 0;
+    CHECK(gather(witnesses, &count, 2, after_ms(30000)) == 0);
+    uint32_t seq = 0;
+    CHECK(maelys_sys_owned_signal(owned, SIGTERM, 1, &seq) == MAELYS_SYS_OK);
+    CHECK(maelys_sys_owned_wait(owned, after_ms(10000), &state) == MAELYS_SYS_OK);
+    CHECK_PHASE(state, MAELYS_SYS_OWNED_ENDED);
+    CHECK(state.leader.signaled && state.leader.term_signal == SIGTERM);
+    CHECK(state.keeper_reaped && !state.keeper_failure);
+    CHECK(all_ended_by(witnesses, count, after_ms(1000)));
+    CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
+    drop_witnesses(witnesses, count);
     return 0;
 }
 
@@ -1122,10 +1200,12 @@ int main(int argc, char **argv) {
     if (open_listener() != 0) return 1;
     if (write_fakes() != 0) return 1;
     int before = count_open();
-    static int (*const cases[])(void) = {test_stop_leader, test_end_with_leader, test_leader_exits_descendant_stays,
+    static int (*const cases[])(void) = {test_stop_leader, test_end_with_leader, test_term_refusal_diagnostic,
+        test_end_with_leader_kills_descendant, test_leader_exits_descendant_stays,
         test_host_killed, test_ignore_term, test_escape_is_outside, test_table_env_cwd, test_signals_default,
         test_keeper_unresponsive, test_refusals, test_fake_keeper, test_uncertain_then_ended, test_many_cycles};
-    static const char *const names[] = {"stop_leader", "end_with_leader", "leader_exits_descendant_stays",
+    static const char *const names[] = {"stop_leader", "end_with_leader", "term_refusal_diagnostic",
+        "end_with_leader_kills_descendant", "leader_exits_descendant_stays",
         "host_killed", "ignore_term", "escape_is_outside", "table_env_cwd", "signals_default",
         "keeper_unresponsive", "refusals", "fake_keeper", "uncertain_then_ended", "many_cycles"};
     int failed = 0;
@@ -1155,6 +1235,8 @@ int main(int argc, char **argv) {
     }
     puts("ok - owned a leader stopped: a signal taken and answered, saturation refused at sixteen and every accepted request answered, release refused while alive, group gone");
     puts("ok - owned END_WITH_LEADER: a program that exits ends its group");
+    puts("ok - owned TERM acknowledged, final KILL refusal on macOS retained with its provenance, cleanup confirmed");
+    puts("ok - owned END_WITH_LEADER kills a descendant that ignores TERM after its leader exits");
     puts("ok - owned the leader leaves, a grandchild stays protected until stop; the grace ends with the leader");
     puts("ok - owned the host killed by SIGKILL, a copy of its life pipe held elsewhere: leader and grandchild stopped within the bound, seen from outside");
     puts("ok - owned a program that ignores SIGTERM: the grace, then SIGKILL");

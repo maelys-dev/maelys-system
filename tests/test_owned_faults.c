@@ -146,6 +146,9 @@ static int test_started_then_done_in_the_last_look(void) {
     CHECK(maelys_sys_deadline_after(5000, &deadline) == MAELYS_SYS_OK);
     CHECK(maelys_sys_owned_wait(owned, deadline, &state) == MAELYS_SYS_OK);
     CHECK(state.phase == MAELYS_SYS_OWNED_ENDED && state.keeper_reaped);
+    maelys_sys_owned_refusal_t refusal;
+    CHECK(maelys_sys_owned_last_refusal(owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(!refusal.supported && !refusal.recorded && !refusal.complete); /* protocol-1 old keeper */
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK && !owned);
     CHECK(count_open() == before);
     CHECK(unlink(fault_signal_path) == 0);
@@ -262,6 +265,9 @@ static int test_split_started_is_abandoned(void) {
     CHECK(maelys_sys_owned_pid(owned) == -1);
     CHECK(state.truncated_final && state.state_from_exit_code);
     CHECK(state.phase == MAELYS_SYS_OWNED_ENDED && state.keeper_reaped);
+    maelys_sys_owned_refusal_t refusal;
+    CHECK(maelys_sys_owned_last_refusal(owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.supported && !refusal.complete); /* exit code carries no diagnostic */
     CHECK(maelys_sys_owned_release(&owned) == MAELYS_SYS_OK);
     CHECK(count_open() == before);
     return 0;
@@ -317,6 +323,53 @@ static int test_linger_with_leader_unreaped(void) {
     return 0;
 }
 
+/* Queue coalescing may put a newer PHASE ahead of an older ACK or BEAT.
+ * The last refusal must never roll back, even within the same millisecond. */
+static int test_refusal_snapshots(void) {
+    maelys_sys_owned_t owned;
+    memset(&owned, 0, sizeof(owned));
+    owned.ctl = -1;
+    owned.refusal.supported = 1;
+    owned_record_t newer = make_record(OWNED_K_PHASE);
+    newer.a = MAELYS_SYS_OWNED_OBSERVING;
+    newer.length = 2;
+    owned_refusal_wire_t wire = {.monotonic_ms = 123, .signo = 0, .error_number = EPERM,
+        .phase = MAELYS_SYS_OWNED_OBSERVING, .flags = OWNED_R_GROUP | OWNED_R_ENDED | OWNED_R_REAPED};
+    memcpy(newer.pad, &wire, sizeof(wire));
+    apply(&owned, &newer, 456);
+    owned_record_t older = make_record(OWNED_K_ACK);
+    older.length = 1;
+    wire.signo = SIGKILL;
+    wire.phase = MAELYS_SYS_OWNED_RUNNING;
+    wire.flags = OWNED_R_GROUP | OWNED_R_ENDED;
+    memcpy(older.pad, &wire, sizeof(wire));
+    apply(&owned, &older, 457);
+    maelys_sys_owned_refusal_t refusal;
+    CHECK(maelys_sys_owned_last_refusal(&owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.recorded && !refusal.complete && refusal.signo == 0);
+    CHECK(refusal.monotonic_ms == 123 && refusal.error_number == EPERM);
+    CHECK(refusal.leader_reaped && refusal.leader_ended && refusal.to_group);
+    CHECK(refusal.phase == MAELYS_SYS_OWNED_OBSERVING);
+    newer.type = OWNED_K_DONE;
+    newer.a = MAELYS_SYS_OWNED_ENDED;
+    apply(&owned, &newer, 458);
+    CHECK(maelys_sys_owned_last_refusal(&owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.complete && refusal.recorded && owned.phase == MAELYS_SYS_OWNED_ENDED);
+
+    memset(&owned, 0, sizeof(owned));
+    owned.ctl = -1;
+    owned.refusal.supported = 1;
+    newer.length = 0;
+    memset(newer.pad, 0, sizeof(newer.pad));
+    apply(&owned, &newer, 500);
+    CHECK(maelys_sys_owned_last_refusal(&owned, &refusal) == MAELYS_SYS_OK);
+    CHECK(refusal.complete && !refusal.recorded);
+    CHECK(maelys_sys_owned_last_refusal(NULL, &refusal) == MAELYS_SYS_ERR_ARGUMENT);
+    CHECK(!refusal.supported && !refusal.recorded && !refusal.complete);
+    CHECK(maelys_sys_owned_last_refusal(&owned, NULL) == MAELYS_SYS_ERR_ARGUMENT);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     (void)argc;
     if (!realpath(argv[0], self)) return 1;
@@ -332,12 +385,13 @@ int main(int argc, char **argv) {
     beside(split_keeper, sizeof(split_keeper), "keeper_split_started");
     beside(never_reap_keeper, sizeof(never_reap_keeper), "keeper_never_reap");
     if (warm_up(split_keeper) || warm_up(never_reap_keeper)) return 1;
-    int failed = test_started_then_done_in_the_last_look() || test_split_started_is_abandoned() ||
+    int failed = test_refusal_snapshots() || test_started_then_done_in_the_last_look() || test_split_started_is_abandoned() ||
         test_linger_with_leader_unreaped();
     (void)unlink(fake);
     if (failed) return 1;
     if (rmdir(root) != 0) return 1;
     puts("ok - owned white box: STARTED and DONE read in the last look give a success whose state is DONE's");
+    puts("ok - owned white box: old keeper diagnostics unavailable, coalesced snapshots never regress, DONE alone completes history");
     puts("ok - owned white box: a STARTED cut by the deadline validates nothing: never finished, a timeout on both sides");
     puts("ok - owned white box: a leader never reaped ends in UNCERTAIN_FINAL at the linger's own deadline, without idle turns");
     return 0;

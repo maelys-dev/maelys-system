@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Add `maelys_sys_owned_last_refusal` (for 0.15.0), a cached diagnostic
+  separate from `owned_state`: the last EPERM, its signal or presence probe, target,
+  time, phase and leader state at the call. It preserves the refusal
+  across later successes and says whether the keeper supports it and
+  whether its final snapshot arrived. The existing ABI 1 structures and
+  legacy flag retain their behavior. Protocol 1 gains an optional
+  capability; old keepers remain usable without the diagnostic and old
+  hosts work with new keepers.
+- Clarify behavior present since 0.14.0: a macOS group containing only
+  the retained dead leader refuses the final SIGKILL with EPERM, then
+  disappears after reaping. ENDED and a historical refusal are compatible
+  on ordinary completion; the diagnostic is for debugging, not an alert
+  or a cleanup decision. The protective SIGKILL, genuine
+  refusals and uncertainty handling are unchanged; no cause is inferred
+  merely from the leader being dead.
+- Guard refusal diagnostics with mutations that accept an older snapshot,
+  omit recording EPERM, or mark history complete before DONE.
+
 ## 0.14.4 - 2026-10-24
 
 - `KEEPER_PATH` is a build variable of its own, engaged: the path of the
